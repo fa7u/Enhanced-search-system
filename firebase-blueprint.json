@@ -1,0 +1,33 @@
+{
+  "entities": {
+    "WhitelistEntry": {
+      "title": "Whitelist Entry",
+      "description": "An entry in the whitelist representing an allowed user email.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "addedAt"]
+    },
+    "Admin": {
+      "title": "Admin",
+      "description": "A system administrator with full access.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" }
+      },
+      "required": ["email"]
+    }
+  },
+  "firestore": {
+    "/whitelist/{email}": {
+      "schema": "WhitelistEntry",
+      "description": "Collection of allowed user emails."
+    },
+    "/admins/{uid}": {
+      "schema": "Admin",
+      "description": "Collection of admins."
+    }
+  }
+}

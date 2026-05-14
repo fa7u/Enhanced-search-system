@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+       // We can also check by email for the bootstrap admin
+       return isSignedIn() && (
+         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+         request.auth.token.email == "langmix2@gmail.com"
+       );
+    }
+
+    function isValidWhitelistEntry(data) {
+      return data.email is string && data.email.size() <= 256 &&
+             data.addedAt is timestamp;
+    }
+
+    // Whitelist collection
+    match /whitelist/{email} {
+      // Users can check their own status
+      allow get: if isSignedIn() && request.auth.token.email == email;
+      
+      // Admins can manage the list
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidWhitelistEntry(request.resource.data);
+      allow update: if isAdmin() && isValidWhitelistEntry(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    // Admins collection
+    match /admins/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+  }
+}
