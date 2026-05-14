@@ -276,24 +276,34 @@ export default function App() {
 
   // Firebase Auth Observer
   useEffect(() => {
-    const findEmail = (user: any) => {
-      if (user.email) return user.email;
-      if (user.providerData && user.providerData.length > 0) {
-        for (const provider of user.providerData) {
-          if (provider.email) return provider.email;
+    const findEmail = (u: any) => {
+      if (!u) return null;
+      console.log("Detecting email for user:", u.uid);
+      if (u.email) {
+        console.log("Primary email found:", u.email);
+        return u.email;
+      }
+      if (u.providerData && u.providerData.length > 0) {
+        for (const p of u.providerData) {
+          if (p.email) {
+            console.log("Provider email found:", p.email);
+            return p.email;
+          }
         }
       }
+      console.warn("No email found in any provider data for UID:", u.uid);
       return null;
     };
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        const email = findEmail(currentUser);
-        console.log("Auth State Changed: Detected email:", email);
-        await checkAuthorization(email || '');
+        const detectedEmail = findEmail(currentUser);
+        console.log("Auth event triggered. Email detected:", detectedEmail);
+        await checkAuthorization(detectedEmail || '');
       } else {
         setIsAuthorized(null);
+        setIsAdmin(false);
         setIsCheckingAuth(false);
       }
     });
@@ -303,67 +313,84 @@ export default function App() {
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
     setIsAdmin(false); 
-    const email = rawEmail.trim().toLowerCase();
-    console.log("---------------- AUTH CHECK START ----------------");
-    console.log("Checking:", email || "EMPTY_EMAIL");
+    const email = rawEmail?.trim()?.toLowerCase() || '';
+    console.log("--- AUTHORIZATION START ---");
+    console.log("Target Email:", email || "NO_EMAIL");
     
     if (!email) {
-      console.error("No email detected for login!");
+      console.error("Auth Fail: Email is missing");
       setIsAuthorized(false);
       setIsCheckingAuth(false);
       return;
     }
 
     try {
-      const user = auth.currentUser;
-      console.log("Firebase Auth User:", user?.uid, user?.email);
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        console.error("Auth Fail: No authenticated user object found");
+        setIsAuthorized(false);
+        setIsCheckingAuth(false);
+        return;
+      }
 
-      // 1. Owner Check
+      // 1. Owner Hardcoded Check
       if (email === 'langmix2@gmail.com') {
-        console.log("Owner bypass active");
+        console.log("Owner bypass triggered for:", email);
         setIsAdmin(true);
         setIsAuthorized(true);
         setIsCheckingAuth(false);
         return;
       }
       
-      // Separate Admins Collection Check
+      // 2. Multi-pronged Check
+      // We'll check admins AND whitelist concurrently
+      console.log("Starting database checks...");
       try {
-        const uid = user?.uid;
-        if (uid) {
-          const adminRef = doc(db, 'admins', uid);
-          const adminSnap = await getDoc(adminRef);
-          if (adminSnap.exists()) {
-            console.log("Authorized via admins/ collection");
+        const uid = currentUser.uid;
+        const adminRef = doc(db, 'admins', uid);
+        const whitelistRef = doc(db, 'whitelist', email);
+
+        console.log(`Fetching: admins/${uid} and whitelist/${email}`);
+        
+        // Use standard getDoc (leverages cache if needed)
+        const [adminSnap, whitelistSnap] = await Promise.all([
+          getDoc(adminRef).catch(e => { console.warn("Admin fetch fail:", e); return null; }),
+          getDoc(whitelistRef).catch(e => { console.error("Whitelist fetch fail:", e); throw e; })
+        ]);
+
+        let hasAccess = false;
+
+        if (adminSnap?.exists()) {
+          console.log("Access granted: Found in admins collection");
+          setIsAdmin(true);
+          hasAccess = true;
+        }
+
+        if (whitelistSnap?.exists()) {
+          const data = whitelistSnap.data();
+          console.log("Access granted: Found in whitelist collection:", data);
+          if (data?.role === 'admin') {
             setIsAdmin(true);
           }
+          hasAccess = true;
         }
-      } catch (adminErr) {
-        console.warn("UID admin check skipped:", adminErr);
-      }
 
-      // 3. Whitelist Collection Check (Email based)
-      const docRef = doc(db, 'whitelist', email);
-      const docSnap = await getDoc(docRef);
-      
-      if (docSnap.exists()) {
-        const docData = docSnap.data();
-        console.log("Whitelist record found:", docData);
-        if (docData?.role === 'admin') {
-          console.log("Setting isAdmin=true from whitelist record");
-          setIsAdmin(true);
+        if (hasAccess) {
+          setIsAuthorized(true);
+        } else {
+          console.warn(`No record found for ${email} in whitelist.`);
+          setIsAuthorized(false);
         }
-        setIsAuthorized(true);
-      } else {
-        console.warn("Authorization REJECTED: Email not found in whitelist collection.");
+      } catch (innerError: any) {
+        console.error("Auth doc fetch error:", innerError);
         setIsAuthorized(false);
       }
-    } catch (error: any) {
-      console.error('Authorization System Error:', error);
+    } catch (globalError: any) {
+      console.error('Fatal Authorization Error:', globalError);
       setIsAuthorized(false);
     } finally {
       setIsCheckingAuth(false);
-      console.log("---------------- AUTH CHECK END ----------------");
+      console.log("--- AUTHORIZATION END ---");
     }
   };
 
@@ -896,29 +923,36 @@ export default function App() {
           </p>
           
           <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100">
-            <p className="text-[10px] text-slate-400 mb-1 font-bold">بريدك الحالي:</p>
-            <p className="text-sm font-mono text-indigo-600 font-bold break-all">{user?.email || 'لم يتم العثور على بريد'}</p>
+            <p className="text-[10px] text-slate-400 mb-1 font-bold">الحساب المستخدم حالياً:</p>
+            <p className="text-sm font-mono text-indigo-600 font-bold break-all">{user?.email || 'لم يتم اكتشاف بريد إلكتروني'}</p>
+            <p className="text-[9px] text-slate-400 mt-1 uppercase font-bold tracking-tighter">UID: {user?.uid}</p>
           </div>
 
           <div className="flex flex-col gap-3">
             <button 
-              onClick={() => window.open(window.location.href, '_blank')}
-              className="w-full h-12 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
-            >
-              <Database size={18} />
-              الفتح في نافذة جديدة
-            </button>
-            <button 
               onClick={handleRefreshAuth}
               disabled={isCheckingAuth}
-              className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+              className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 disabled:opacity-50"
             >
-              {isCheckingAuth ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Database size={18} />}
-              تحديث الحالة
+              {isCheckingAuth ? (
+                <RefreshCw size={18} className="animate-spin" />
+              ) : (
+                <Database size={18} />
+              )}
+              {isCheckingAuth ? 'جاري التحديث...' : 'تحديث حالة التصريح'}
             </button>
+            
+            <button 
+              onClick={login}
+              className="w-full h-12 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+            >
+              <User size={18} />
+              تبديل الحساب / إعادة الدخول
+            </button>
+
             <button 
               onClick={() => auth.signOut()}
-              className="w-full h-12 bg-white text-slate-600 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+              className="w-full h-12 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2"
             >
               <LogOut size={18} />
               تسجيل الخروج
