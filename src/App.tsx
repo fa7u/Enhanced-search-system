@@ -327,14 +327,14 @@ export default function App() {
         return;
       }
       
-      // 2. Admins Collection Check (UID based)
+      // Separate Admins Collection Check
       try {
         const uid = user?.uid;
         if (uid) {
           const adminRef = doc(db, 'admins', uid);
-          const adminSnap = await getDocFromServer(adminRef);
+          const adminSnap = await getDoc(adminRef);
           if (adminSnap.exists()) {
-            console.log("Authorized via admins/ (UID)");
+            console.log("Authorized via admins/ collection");
             setIsAdmin(true);
           }
         }
@@ -344,7 +344,7 @@ export default function App() {
 
       // 3. Whitelist Collection Check (Email based)
       const docRef = doc(db, 'whitelist', email);
-      const docSnap = await getDocFromServer(docRef);
+      const docSnap = await getDoc(docRef);
       
       if (docSnap.exists()) {
         const docData = docSnap.data();
@@ -406,9 +406,8 @@ export default function App() {
     if (!isAdmin) return;
     const path = 'whitelist';
     try {
-      // Note: Firestore 'list' requires allow list: if isAdmin()
-      const { collection, getDocsFromServer } = await import('firebase/firestore');
-      const querySnapshot = await getDocsFromServer(collection(db, path));
+      const { collection, getDocs } = await import('firebase/firestore');
+      const querySnapshot = await getDocs(collection(db, path));
       const list = querySnapshot.docs.map(doc => doc.data() as {email: string, addedAt: any, role: 'admin' | 'visitor'});
       setWhitelist(list);
     } catch (error) {
