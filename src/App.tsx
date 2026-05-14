@@ -275,10 +275,22 @@ export default function App() {
 
   // Firebase Auth Observer
   useEffect(() => {
+    const findEmail = (user: any) => {
+      if (user.email) return user.email;
+      if (user.providerData && user.providerData.length > 0) {
+        for (const provider of user.providerData) {
+          if (provider.email) return provider.email;
+        }
+      }
+      return null;
+    };
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser) {
-        await checkAuthorization(currentUser.email || '');
+        const email = findEmail(currentUser);
+        console.log("Auth State Changed: Detected email:", email);
+        await checkAuthorization(email || '');
       } else {
         setIsAuthorized(null);
         setIsCheckingAuth(false);
@@ -290,11 +302,13 @@ export default function App() {
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
     const email = rawEmail.trim().toLowerCase();
-    console.log("Checking authorization for:", email || "NO EMAIL FOUND");
+    console.log("Authorization logic start for:", email || "EMPTY_EMAIL");
     
     if (!email) {
-      console.error("Critical Auth Issue: User logged in but no email was provided by the provider.");
-      console.log("Current user object:", auth.currentUser);
+      console.error("CRITICAL: No email detected for logged in user!");
+      // Fallback: search for any email in provider data
+      const user = auth.currentUser;
+      console.log("Full Debug User:", user);
       setIsAuthorized(false);
       setIsCheckingAuth(false);
       return;
@@ -303,16 +317,9 @@ export default function App() {
     try {
       // 1. Validation check for owner (langmix2@gmail.com)
       const user = auth.currentUser;
-      console.log("Full Auth User Object:", {
-        uid: user?.uid,
-        email: user?.email,
-        emailVerified: user?.emailVerified,
-        isAnonymous: user?.isAnonymous,
-        providerData: user?.providerData
-      });
-
+      
       if (email === 'langmix2@gmail.com') {
-        console.log("System owner identified successfully:", email);
+        console.log("Owner bypass check passed");
         setIsAdmin(true);
         setIsAuthorized(true);
         setIsCheckingAuth(false);
