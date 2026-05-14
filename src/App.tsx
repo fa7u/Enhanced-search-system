@@ -27,7 +27,8 @@ import {
   LogOut,
   ShieldAlert,
   Mail,
-  Trash2
+  Trash2,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
@@ -301,80 +302,68 @@ export default function App() {
 
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
+    setIsAdmin(false); 
     const email = rawEmail.trim().toLowerCase();
-    console.log("Authorization logic start for:", email || "EMPTY_EMAIL");
+    console.log("---------------- AUTH CHECK START ----------------");
+    console.log("Checking:", email || "EMPTY_EMAIL");
     
     if (!email) {
-      console.error("CRITICAL: No email detected for logged in user!");
-      // Fallback: search for any email in provider data
-      const user = auth.currentUser;
-      console.log("Full Debug User:", user);
+      console.error("No email detected for login!");
       setIsAuthorized(false);
       setIsCheckingAuth(false);
       return;
     }
 
     try {
-      // 1. Validation check for owner (langmix2@gmail.com)
       const user = auth.currentUser;
-      
+      console.log("Firebase Auth User:", user?.uid, user?.email);
+
+      // 1. Owner Check
       if (email === 'langmix2@gmail.com') {
-        console.log("Owner bypass check passed");
+        console.log("Owner bypass active");
         setIsAdmin(true);
         setIsAuthorized(true);
         setIsCheckingAuth(false);
         return;
       }
       
-      if (!email) {
-        console.error("No email found for current user. Check if Google Auth provided email permissions.");
-        setIsAuthorized(false);
-        setIsCheckingAuth(false);
-        return;
-      }
-      
-      // Separate Admin check (system admins via collection)
+      // 2. Admins Collection Check (UID based)
       try {
-        const uid = auth.currentUser?.uid;
+        const uid = user?.uid;
         if (uid) {
           const adminRef = doc(db, 'admins', uid);
-          // Try to get from server to be sure
           const adminSnap = await getDocFromServer(adminRef);
           if (adminSnap.exists()) {
+            console.log("Authorized via admins/ (UID)");
             setIsAdmin(true);
-            console.log("User authorized as admin via admins collection");
           }
         }
       } catch (adminErr) {
-        console.warn("Admin check skipped or failed:", adminErr);
+        console.warn("UID admin check skipped:", adminErr);
       }
 
-      // 2. Database check for whitelist
+      // 3. Whitelist Collection Check (Email based)
       const docRef = doc(db, 'whitelist', email);
       const docSnap = await getDocFromServer(docRef);
       
       if (docSnap.exists()) {
         const docData = docSnap.data();
-        console.log("Found whitelist entry for:", email, "Role:", docData?.role);
+        console.log("Whitelist record found:", docData);
         if (docData?.role === 'admin') {
+          console.log("Setting isAdmin=true from whitelist record");
           setIsAdmin(true);
         }
         setIsAuthorized(true);
       } else {
-        console.warn("Rejection: Email not in whitelist collection:", email);
+        console.warn("Authorization REJECTED: Email not found in whitelist collection.");
         setIsAuthorized(false);
       }
     } catch (error: any) {
-      console.error('Authorization Check Failed:', error);
-      
-      // If it's a permission error, it means the rule rejected the 'get' call
-      if (error?.code === 'permission-denied' || (error?.message && error.message.toLowerCase().includes('permission'))) {
-        console.log("Rule denied access to whitelist check for:", email);
-      }
-      
+      console.error('Authorization System Error:', error);
       setIsAuthorized(false);
     } finally {
       setIsCheckingAuth(false);
+      console.log("---------------- AUTH CHECK END ----------------");
     }
   };
 
@@ -415,14 +404,16 @@ export default function App() {
   // Whitelist Management Functions
   const fetchWhitelist = async () => {
     if (!isAdmin) return;
+    const path = 'whitelist';
     try {
       // Note: Firestore 'list' requires allow list: if isAdmin()
       const { collection, getDocsFromServer } = await import('firebase/firestore');
-      const querySnapshot = await getDocsFromServer(collection(db, 'whitelist'));
+      const querySnapshot = await getDocsFromServer(collection(db, path));
       const list = querySnapshot.docs.map(doc => doc.data() as {email: string, addedAt: any, role: 'admin' | 'visitor'});
       setWhitelist(list);
     } catch (error) {
       console.error('Fetch Whitelist Error:', error);
+      handleFirestoreError(error, OperationType.LIST, path);
     }
   };
 
@@ -1061,9 +1052,18 @@ export default function App() {
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">لوحة التحكم الإدارية</p>
                   </div>
                 </div>
-                <button onClick={() => setShowAdminPanel(false)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400">
-                  <X size={20} />
-                </button>
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={() => user?.email && checkAuthorization(user.email)}
+                    className="p-2 hover:bg-slate-100 rounded-xl text-slate-400"
+                    title="تحديث الصلاحيات"
+                  >
+                    <RefreshCw size={18} className={isCheckingAuth ? 'animate-spin' : ''} />
+                  </button>
+                  <button onClick={() => setShowAdminPanel(false)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400">
+                    <X size={20} />
+                  </button>
+                </div>
               </div>
 
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
