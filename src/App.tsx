@@ -302,10 +302,26 @@ export default function App() {
 
     try {
       // 1. Validation check for owner (langmix2@gmail.com)
+      const user = auth.currentUser;
+      console.log("Full Auth User Object:", {
+        uid: user?.uid,
+        email: user?.email,
+        emailVerified: user?.emailVerified,
+        isAnonymous: user?.isAnonymous,
+        providerData: user?.providerData
+      });
+
       if (email === 'langmix2@gmail.com') {
-        console.log("System owner identified:", email);
+        console.log("System owner identified successfully:", email);
         setIsAdmin(true);
         setIsAuthorized(true);
+        setIsCheckingAuth(false);
+        return;
+      }
+      
+      if (!email) {
+        console.error("No email found for current user. Check if Google Auth provided email permissions.");
+        setIsAuthorized(false);
         setIsCheckingAuth(false);
         return;
       }
@@ -867,16 +883,34 @@ export default function App() {
             <Lock size={40} />
           </div>
           <h1 className="text-2xl font-bold text-slate-800 mb-2 font-sans">غير مصرح لك بالدخول</h1>
+          
+          {!user?.email && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-700 text-xs p-4 rounded-xl mb-4 text-right">
+              <p className="font-bold flex items-center gap-2 mb-1">
+                <ShieldAlert size={14} />
+                تنبيه: لم يتم العثور على بريد إلكتروني
+              </p>
+              <p>يبدو أن المتصفح يمنع مشاركة بريدك الإلكتروني. يرجى محاولة فتح التطبيق في نافذة جديدة أو متصفح آخر.</p>
+            </div>
+          )}
+
           <p className="text-slate-500 text-sm mb-6 leading-relaxed">
             عذراً، هذا البريد الإلكتروني غير مضاف في قائمة المصرح لهم بالدخول إلى النظام.
           </p>
           
           <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100">
             <p className="text-[10px] text-slate-400 mb-1 font-bold">بريدك الحالي:</p>
-            <p className="text-sm font-mono text-indigo-600 font-bold break-all">{user?.email}</p>
+            <p className="text-sm font-mono text-indigo-600 font-bold break-all">{user?.email || 'لم يتم العثور على بريد'}</p>
           </div>
 
           <div className="flex flex-col gap-3">
+            <button 
+              onClick={() => window.open(window.location.href, '_blank')}
+              className="w-full h-12 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all flex items-center justify-center gap-2"
+            >
+              <Database size={18} />
+              الفتح في نافذة جديدة
+            </button>
             <button 
               onClick={handleRefreshAuth}
               disabled={isCheckingAuth}
