@@ -26,7 +26,8 @@ import {
   Lock,
   LogOut,
   ShieldAlert,
-  Mail
+  Mail,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
@@ -1073,9 +1074,11 @@ export default function App() {
                         </div>
                         <button 
                           onClick={() => removeFromWhitelist(item.email)}
-                          className="p-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all font-bold text-[10px]"
+                          title="إزالة هذا الحساب"
                         >
-                          <X size={16} />
+                          <Trash2 size={12} />
+                          <span>حذف</span>
                         </button>
                       </div>
                       <div className="flex gap-2 mt-1 border-t border-slate-50 pt-2">
