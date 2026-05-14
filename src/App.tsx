@@ -40,6 +40,11 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope('email');
+googleProvider.addScope('profile');
+googleProvider.setCustomParameters({
+  prompt: 'select_account'
+});
 
 enum OperationType {
   CREATE = 'create',
@@ -285,10 +290,11 @@ export default function App() {
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
     const email = rawEmail.trim().toLowerCase();
-    console.log("Checking authorization for email:", email);
+    console.log("Checking authorization for:", email || "NO EMAIL FOUND");
     
     if (!email) {
-      console.warn("Auth check: Email is empty");
+      console.error("Critical Auth Issue: User logged in but no email was provided by the provider.");
+      console.log("Current user object:", auth.currentUser);
       setIsAuthorized(false);
       setIsCheckingAuth(false);
       return;
@@ -297,52 +303,52 @@ export default function App() {
     try {
       // 1. Validation check for owner (langmix2@gmail.com)
       if (email === 'langmix2@gmail.com') {
-        console.log("Identifying as system owner:", email);
+        console.log("System owner identified:", email);
         setIsAdmin(true);
         setIsAuthorized(true);
         setIsCheckingAuth(false);
         return;
       }
       
-      // Separate Admin check (system admins)
+      // Separate Admin check (system admins via collection)
       try {
         const uid = auth.currentUser?.uid;
         if (uid) {
           const adminRef = doc(db, 'admins', uid);
+          // Try to get from server to be sure
           const adminSnap = await getDocFromServer(adminRef);
           if (adminSnap.exists()) {
             setIsAdmin(true);
-            console.log("User identified as system admin via Firestore UID");
+            console.log("User authorized as admin via admins collection");
           }
         }
       } catch (adminErr) {
-        console.warn("Admin check failed (non-critical):", adminErr);
+        console.warn("Admin check skipped or failed:", adminErr);
       }
 
       // 2. Database check for whitelist
-      // Ensure we are fetching specifically from the server to avoid cache issues
       const docRef = doc(db, 'whitelist', email);
       const docSnap = await getDocFromServer(docRef);
       
       if (docSnap.exists()) {
-        const data = docSnap.data();
-        console.log("Whitelist found in Firestore for:", email, "Role:", data?.role);
-        if (data?.role === 'admin') {
+        const docData = docSnap.data();
+        console.log("Found whitelist entry for:", email, "Role:", docData?.role);
+        if (docData?.role === 'admin') {
           setIsAdmin(true);
         }
         setIsAuthorized(true);
       } else {
-        console.warn("Auth check failed: Email not found in Firestore 'whitelist' collection:", email);
+        console.warn("Rejection: Email not in whitelist collection:", email);
         setIsAuthorized(false);
       }
-    } catch (error) {
-      console.error('Auth Check Error Detail:', error);
-      const path = `whitelist/${email}`;
-      // Catch permission errors as per integration guide
-      if (error instanceof Error && (error.message.includes('permission') || (error as any).code === 'permission-denied')) {
-        handleFirestoreError(error, OperationType.GET, path);
+    } catch (error: any) {
+      console.error('Authorization Check Failed:', error);
+      
+      // If it's a permission error, it means the rule rejected the 'get' call
+      if (error?.code === 'permission-denied' || (error?.message && error.message.toLowerCase().includes('permission'))) {
+        console.log("Rule denied access to whitelist check for:", email);
       }
-      // In case of other errors, assume not authorized for safety
+      
       setIsAuthorized(false);
     } finally {
       setIsCheckingAuth(false);
