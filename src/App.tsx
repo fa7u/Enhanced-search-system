@@ -280,36 +280,49 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  const checkAuthorization = async (email: string) => {
+  const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
-    const path = `whitelist/${email.toLowerCase()}`;
+    const email = rawEmail.trim().toLowerCase();
+    console.log("Checking authorization for email:", email);
+    
     try {
       // 1. Validation check for owner (langmix2@gmail.com)
-      if (email.toLowerCase() === 'langmix2@gmail.com') {
+      if (email === 'langmix2@gmail.com') {
         setIsAuthorized(true);
         setIsAdmin(true);
         setIsCheckingAuth(false);
         return;
       }
       
-      // Check if user is in admins collection too
-      const adminRef = doc(db, 'admins', auth.currentUser?.uid || '');
-      const adminSnap = await getDoc(adminRef);
-      if (adminSnap.exists()) {
-        setIsAdmin(true);
+      // Separate Admin check to prevent it from blocking the whitelist check
+      try {
+        const uid = auth.currentUser?.uid;
+        if (uid) {
+          const adminRef = doc(db, 'admins', uid);
+          const adminSnap = await getDoc(adminRef);
+          if (adminSnap.exists()) {
+            setIsAdmin(true);
+            console.log("User identified as Admin via Firestore");
+          }
+        }
+      } catch (adminErr) {
+        console.warn("Admin check failed (non-critical):", adminErr);
       }
 
       // 2. Database check for whitelist
-      const docRef = doc(db, 'whitelist', email.toLowerCase());
+      const docRef = doc(db, 'whitelist', email);
       const docSnap = await getDoc(docRef);
       
       if (docSnap.exists()) {
+        console.log("Authorization successful: email found in whitelist");
         setIsAuthorized(true);
       } else {
+        console.warn("Authorization failed: email not found in whitelist collection", email);
         setIsAuthorized(false);
       }
     } catch (error) {
       console.error('Auth Check Error:', error);
+      const path = `whitelist/${email}`;
       // Catch permission errors as per integration guide
       if (error instanceof Error && (error.message.includes('permission') || (error as any).code === 'permission-denied')) {
         handleFirestoreError(error, OperationType.GET, path);
