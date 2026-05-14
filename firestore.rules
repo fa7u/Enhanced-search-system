@@ -12,16 +12,18 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-       // We can also check by email for the bootstrap admin
+       // Check by email for the bootstrap admin and role in whitelist
        return isSignedIn() && (
+         request.auth.token.email == "langmix2@gmail.com" ||
          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-         request.auth.token.email == "langmix2@gmail.com"
+         get(/databases/$(database)/documents/whitelist/$(request.auth.token.email)).data.role == "admin"
        );
     }
 
     function isValidWhitelistEntry(data) {
       return data.email is string && data.email.size() <= 256 &&
-             data.addedAt is timestamp;
+             data.addedAt is timestamp &&
+             data.role in ["admin", "visitor"];
     }
 
     // Whitelist collection

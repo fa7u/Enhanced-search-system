@@ -101,8 +101,9 @@ export default function App() {
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
-  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any}[]>([]);
+  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, role: 'admin' | 'visitor'}[]>([]);
   const [newEmail, setNewEmail] = useState('');
+  const [newRole, setNewRole] = useState<'admin' | 'visitor'>('visitor');
   const [isAddingEmail, setIsAddingEmail] = useState(false);
   
   const [data, setData] = useState<DataRow[]>([]);
@@ -294,7 +295,7 @@ export default function App() {
         return;
       }
       
-      // Separate Admin check to prevent it from blocking the whitelist check
+      // Separate Admin check (system admins)
       try {
         const uid = auth.currentUser?.uid;
         if (uid) {
@@ -302,11 +303,11 @@ export default function App() {
           const adminSnap = await getDoc(adminRef);
           if (adminSnap.exists()) {
             setIsAdmin(true);
-            console.log("User identified as Admin via Firestore");
+            console.log("User identified as system admin");
           }
         }
       } catch (adminErr) {
-        console.warn("Admin check failed (non-critical):", adminErr);
+        console.warn("Admin check failed:", adminErr);
       }
 
       // 2. Database check for whitelist
@@ -314,10 +315,12 @@ export default function App() {
       const docSnap = await getDoc(docRef);
       
       if (docSnap.exists()) {
-        console.log("Authorization successful: email found in whitelist");
+        const data = docSnap.data();
+        if (data?.role === 'admin') {
+          setIsAdmin(true);
+        }
         setIsAuthorized(true);
       } else {
-        console.warn("Authorization failed: email not found in whitelist collection", email);
         setIsAuthorized(false);
       }
     } catch (error) {
@@ -372,7 +375,7 @@ export default function App() {
       // Note: Firestore 'list' requires allow list: if isAdmin()
       const { collection, getDocs } = await import('firebase/firestore');
       const querySnapshot = await getDocs(collection(db, 'whitelist'));
-      const list = querySnapshot.docs.map(doc => doc.data() as {email: string, addedAt: any});
+      const list = querySnapshot.docs.map(doc => doc.data() as {email: string, addedAt: any, role: 'admin' | 'visitor'});
       setWhitelist(list);
     } catch (error) {
       console.error('Fetch Whitelist Error:', error);
@@ -388,9 +391,11 @@ export default function App() {
       const { setDoc, serverTimestamp } = await import('firebase/firestore');
       await setDoc(doc(db, 'whitelist', email), {
         email,
-        addedAt: serverTimestamp()
+        addedAt: serverTimestamp(),
+        role: newRole
       });
       setNewEmail('');
+      setNewRole('visitor');
       await fetchWhitelist();
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
@@ -489,6 +494,7 @@ export default function App() {
   };
 
   const togglePaid = (originalIdx: number) => {
+    if (!isAuthorized) return;
     setPaidRows(prev => {
       const next = new Set(prev);
       if (next.has(originalIdx)) {
@@ -504,6 +510,7 @@ export default function App() {
   };
 
   const updateNote = (originalIdx: number, header: string, newValue: string) => {
+    if (!isAuthorized) return;
     // 1. Update local state for immediate feedback
     const nextData = [...data];
     nextData[originalIdx] = { ...nextData[originalIdx], [header]: newValue };
@@ -616,6 +623,7 @@ export default function App() {
   };
 
   const exportToExcel = (forceAll = false) => {
+    if (!isAuthorized) return;
     // 1. Decide which data set to export
     // If forceAll is true, take the entire 'data' array. 
     // Otherwise, check if there's a search query to take filteredData.
@@ -878,9 +886,6 @@ export default function App() {
       {/* Top Navigation Bar */}
       <nav className="h-16 bg-white border-b border-slate-200 px-6 md:px-8 flex items-center justify-between shadow-sm shrink-0 sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white">
-            <Search size={22} strokeWidth={2.5} />
-          </div>
           <span className="text-xl font-bold text-slate-800 hidden sm:block">نظام البحث الذكي</span>
         </div>
         
@@ -1001,21 +1006,48 @@ export default function App() {
 
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
                 <p className="text-xs font-bold text-slate-500 mb-3">إضافة بريد جديد:</p>
-                <div className="flex gap-2">
-                  <input 
-                    type="email" 
-                    placeholder="example@gmail.com"
-                    value={newEmail}
-                    onChange={(e) => setNewEmail(e.target.value)}
-                    className="flex-1 h-11 px-4 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                  />
-                  <button 
-                    onClick={addToWhitelist}
-                    disabled={isAddingEmail || !newEmail.trim()}
-                    className="px-6 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center min-w-[80px]"
-                  >
-                    {isAddingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'إضافة'}
-                  </button>
+                <div className="flex flex-col gap-4">
+                  <div className="flex gap-2">
+                    <input 
+                      type="email" 
+                      placeholder="example@gmail.com"
+                      value={newEmail}
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      className="flex-1 h-11 px-4 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <button 
+                      onClick={addToWhitelist}
+                      disabled={isAddingEmail || !newEmail.trim()}
+                      className="px-6 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center min-w-[80px]"
+                    >
+                      {isAddingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'إضافة'}
+                    </button>
+                  </div>
+                  
+                  <div className="flex items-center gap-4 px-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="role"
+                        value="visitor"
+                        checked={newRole === 'visitor'} 
+                        onChange={() => setNewRole('visitor')}
+                        className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-[11px] font-bold text-slate-600">زائر</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="radio" 
+                        name="role"
+                        value="admin"
+                        checked={newRole === 'admin'} 
+                        onChange={() => setNewRole('admin')}
+                        className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-[11px] font-bold text-slate-600">أدمن</span>
+                    </label>
+                  </div>
                 </div>
               </div>
 
@@ -1028,22 +1060,31 @@ export default function App() {
                   </div>
                 ) : (
                   whitelist.map((item) => (
-                    <div key={item.email} className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-2xl group hover:border-indigo-100 transition-all">
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="w-8 h-8 bg-indigo-50 text-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                          <Mail size={14} />
+                    <div key={item.email} className="flex flex-col gap-2 p-3 bg-white border border-slate-100 rounded-2xl group hover:border-indigo-100 transition-all">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className="w-8 h-8 bg-indigo-50 text-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                            <Mail size={14} />
+                          </div>
+                          <div className="overflow-hidden">
+                            <p className="text-sm font-bold text-slate-700 truncate">{item.email}</p>
+                            <p className="text-[10px] text-slate-400">مضاف منذ: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}</p>
+                          </div>
                         </div>
-                        <div className="overflow-hidden">
-                          <p className="text-sm font-bold text-slate-700 truncate">{item.email}</p>
-                          <p className="text-[10px] text-slate-400">مضاف منذ: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}</p>
-                        </div>
+                        <button 
+                          onClick={() => removeFromWhitelist(item.email)}
+                          className="p-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
+                        >
+                          <X size={16} />
+                        </button>
                       </div>
-                      <button 
-                        onClick={() => removeFromWhitelist(item.email)}
-                        className="p-2 text-slate-300 hover:text-red-500 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <X size={16} />
-                      </button>
+                      <div className="flex gap-2 mt-1 border-t border-slate-50 pt-2">
+                        {item.role === 'admin' ? (
+                          <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold">أدمن</span>
+                        ) : (
+                          <span className="text-[9px] bg-slate-50 text-slate-600 px-1.5 py-0.5 rounded font-bold">زائر</span>
+                        )}
+                      </div>
                     </div>
                   ))
                 )}
@@ -1067,13 +1108,20 @@ export default function App() {
               رفع الملفات
             </h2>
             <div 
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-indigo-100 rounded-2xl bg-indigo-50/30 p-8 flex flex-col items-center justify-center text-center group cursor-pointer hover:bg-indigo-50/50 hover:border-indigo-300 transition-all"
+              onClick={() => {
+                if (isAuthorized) {
+                  fileInputRef.current?.click();
+                } else {
+                  alert('ليس لديك صلاحية رفع الملفات');
+                }
+              }}
+              className={`border-2 border-dashed border-indigo-100 rounded-2xl bg-indigo-50/30 p-8 flex flex-col items-center justify-center text-center group transition-all ${isAuthorized ? 'cursor-pointer hover:bg-indigo-50/50 hover:border-indigo-300' : 'opacity-50 grayscale cursor-not-allowed'}`}
             >
               <div className="w-12 h-12 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
                 <FileSpreadsheet size={24} className="text-indigo-600" />
               </div>
               <p className="text-sm font-semibold text-slate-700">اضغط لرفع ملف Excel</p>
+              {!isAuthorized && <p className="text-[10px] text-red-500 font-bold mt-2">غير مصرح لك بالرفع</p>}
               <p className="text-xs text-slate-400 mt-1">يدعم XLSX, XLS, CSV</p>
             </div>
             <input
@@ -1081,6 +1129,7 @@ export default function App() {
               type="file"
               className="hidden"
               accept=".xlsx, .xls, .csv"
+              disabled={!isAuthorized}
               onChange={handleFileUpload}
             />
             
@@ -1435,10 +1484,18 @@ export default function App() {
                                 return (
                                   <td 
                                     key={`${header}-${hIdx}`} 
-                                    onClick={() => isNoteColumn && setEditingCell({ row: originalIdx, col: header })}
+                                    onClick={() => {
+                                      if (isNoteColumn) {
+                                        if (isAuthorized) {
+                                          setEditingCell({ row: originalIdx, col: header });
+                                        } else {
+                                          alert('ليس لديك صلاحية التعديل');
+                                        }
+                                      }
+                                    }}
                                     className={`px-6 py-4 text-sm font-medium transition-all ${textClass} ${
                                       isNoteColumn 
-                                        ? 'whitespace-normal min-w-[300px] break-words cursor-pointer' 
+                                        ? `whitespace-normal min-w-[300px] break-words ${isAuthorized ? 'cursor-pointer' : 'cursor-not-allowed opacity-80'}` 
                                         : header.includes('الدفع') || header.includes('payment')
                                         ? 'whitespace-normal min-w-[150px]'
                                         : 'whitespace-nowrap max-w-[250px] overflow-hidden text-ellipsis'
