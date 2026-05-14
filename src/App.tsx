@@ -32,20 +32,25 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser, browserPopupRedirectResolver } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer, getDoc } from 'firebase/firestore';
 import firebaseConfig from '@/firebase-applet-config.json';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
-googleProvider.addScope('email');
-googleProvider.addScope('profile');
-googleProvider.setCustomParameters({
-  prompt: 'select_account'
-});
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const auth = getAuth();
+
+// Provider factory to ensure a fresh instance or correctly configured one
+const getGoogleProvider = () => {
+  const provider = new GoogleAuthProvider();
+  provider.addScope('email');
+  provider.addScope('profile');
+  provider.setCustomParameters({
+    prompt: 'select_account'
+  });
+  return provider;
+};
 
 enum OperationType {
   CREATE = 'create',
@@ -206,26 +211,39 @@ export default function App() {
   // Initialize IndexedDB and load saved data
   useEffect(() => {
     const loadSavedData = async () => {
-      setIsLoading(true);
-      // Restore search query from localStorage
-      const savedQuery = localStorage.getItem('last_search_query');
-      if (savedQuery) setSearchQuery(savedQuery);
+      if (!user) {
+        // Clear local states on logout
+        setData([]);
+        setHeaders([]);
+        setFileName(null);
+        setPaidRows(new Set());
+        setModifiedRows(new Set());
+        setIsModified(false);
+        setSearchQuery('');
+        return;
+      }
 
+      setIsLoading(true);
+      
+      // Restore search query from localStorage - per user
+      const savedQuery = localStorage.getItem(`last_search_query_${user.uid}`);
+      if (savedQuery) setSearchQuery(savedQuery);
+      
       try {
         const dbRequest = indexedDB.open('FileSearchDB', 1);
         
         dbRequest.onupgradeneeded = (e: any) => {
-          const db = e.target.result;
-          if (!db.objectStoreNames.contains('files')) {
-            db.createObjectStore('files', { keyPath: 'id' });
+          const dbView = e.target.result;
+          if (!dbView.objectStoreNames.contains('files')) {
+            dbView.createObjectStore('files', { keyPath: 'id' });
           }
         };
 
         dbRequest.onsuccess = (e: any) => {
-          const db = e.target.result;
-          const transaction = db.transaction(['files'], 'readonly');
+          const dbView = e.target.result;
+          const transaction = dbView.transaction(['files'], 'readonly');
           const store = transaction.objectStore('files');
-          const getRequest = store.get('current_file');
+          const getRequest = store.get(`user_file_${user.uid}`);
 
           getRequest.onsuccess = () => {
             if (getRequest.result) {
@@ -240,7 +258,6 @@ export default function App() {
             };
             const { data: savedData, originalData: savedOriginal, headers: savedHeaders, fileName: savedName, paidIndices, modifiedIndices, isModified: savedModified } = res;
             setData(savedData);
-            // Fallback: if no original data was saved, treat current data as original
             if (savedOriginal && savedOriginal.length > 0) {
               setOriginalData(savedOriginal);
             } else if (savedData && savedData.length > 0) {
@@ -272,7 +289,7 @@ export default function App() {
     };
 
     loadSavedData();
-  }, []);
+  }, [user]);
 
   // Firebase Auth Observer
   useEffect(() => {
@@ -333,62 +350,24 @@ export default function App() {
         return;
       }
 
-      // 1. Owner Hardcoded Check
-      if (email === 'langmix2@gmail.com') {
-        console.log("Owner bypass triggered for:", email);
+      // 1. Owner Hardcoded Check (Admin privileges ONLY for owner)
+      if (email === 'langmix2@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+        console.log("Owner admin detected");
         setIsAdmin(true);
         setIsAuthorized(true);
         setIsCheckingAuth(false);
         return;
       }
       
-      // 2. Multi-pronged Check
-      console.log("Starting database checks...");
-      try {
-        const uid = currentUser.uid;
-        const adminRef = doc(db, 'admins', uid);
-        const whitelistRef = doc(db, 'whitelist', email);
+      // 2. Just Whitelist Check (Access only)
+      const whitelistRef = doc(db, 'whitelist', email);
+      const whitelistSnap = await getDoc(whitelistRef);
 
-        console.log(`Fetching: admins/${uid} and whitelist/${email}`);
-        
-        // Use standard getDoc (leverages cache if needed)
-        const [adminSnap, whitelistSnap] = await Promise.all([
-          getDoc(adminRef).catch(e => { console.warn("Admin fetch fail:", e); return null; }),
-          getDoc(whitelistRef).catch(e => { console.error("Whitelist fetch fail:", e); throw e; })
-        ]);
-
-        let hasAccess = false;
-        let isSystemAdmin = false;
-
-        if (adminSnap?.exists()) {
-          console.log("Access granted: Found in admins collection (UID match)");
-          isSystemAdmin = true;
-          hasAccess = true;
-        }
-
-        if (whitelistSnap?.exists()) {
-          const data = whitelistSnap.data();
-          console.log("Whitelist record data:", data);
-          if (data?.role === 'admin') {
-            console.log("Access granted: Whitelist role is admin");
-            isSystemAdmin = true;
-          }
-          hasAccess = true;
-        }
-
-        if (isSystemAdmin) {
-          setIsAdmin(true);
-        }
-
-        if (hasAccess) {
-          console.log("Authorization Result: GRANTED");
-          setIsAuthorized(true);
-        } else {
-          console.warn(`Authorization Result: REJECTED (Email ${email} not found in whitelist)`);
-          setIsAuthorized(false);
-        }
-      } catch (innerError: any) {
-        console.error("Auth doc fetch error:", innerError);
+      if (whitelistSnap?.exists()) {
+        console.log("Access granted: Email found in whitelist");
+        setIsAuthorized(true);
+      } else {
+        console.warn(`Authorization Result: REJECTED (Email ${email} not found in whitelist)`);
         setIsAuthorized(false);
       }
     } catch (globalError: any) {
@@ -407,21 +386,30 @@ export default function App() {
   };
 
   const login = async () => {
-    if (isLoadingAuth) return;
+    if (isLoadingAuth) {
+      console.warn("Login already in progress...");
+      return;
+    }
     setIsLoadingAuth(true);
+    console.log("Initiating login sequence...");
     try {
-      await signInWithPopup(auth, googleProvider);
+      const provider = getGoogleProvider();
+      const result = await signInWithPopup(auth, provider, browserPopupRedirectResolver);
+      console.log("Login successful for:", result.user.email);
     } catch (error: any) {
-      if (error.code === 'auth/popup-closed-by-user') {
-        console.warn('Login popup closed by user');
-      } else if (error.code === 'auth/cancelled-by-user') {
-        console.warn('Login cancelled by user');
+      if (error.code === 'auth/popup-closed-by-user' || error.code === 'auth/cancelled-by-user') {
+        console.warn('Login flow cancelled by user');
       } else {
-        console.error('Login Error:', error);
-        alert(`حدث خطأ أثناء تسجيل الدخول: ${error.message}\nكود الخطأ: ${error.code}`);
+        console.error('Firebase Auth Error:', error);
+        // Special handling for the internal assertion error
+        if (error.message?.includes('INTERNAL ASSERTION FAILED')) {
+          console.error("Detected Firebase Internal state corruption. Advising refresh.");
+        }
+        alert(`حدث خطأ أثناء تسجيل الدخول: ${error.message}\nالكود: ${error.code}`);
       }
     } finally {
       setIsLoadingAuth(false);
+      console.log("Login sequence concluded.");
     }
   };
 
@@ -460,11 +448,10 @@ export default function App() {
       await setDoc(docRef, {
         email,
         addedAt: serverTimestamp(),
-        role: newRole
+        role: 'visitor'
       });
       console.log("Successfully added to whitelist in Firestore:", email);
       setNewEmail('');
-      setNewRole('visitor');
       await fetchWhitelist();
       alert(`تمت إضافة ${email} بنجاح إلى قاعدة البيانات`);
     } catch (error) {
@@ -493,12 +480,15 @@ export default function App() {
     }
   }, [showAdminPanel, isAdmin]);
 
-  // Sync search query to localStorage
+  // Sync search query to localStorage - per user
   useEffect(() => {
-    if (searchQuery) {
-      localStorage.setItem('last_search_query', searchQuery);
-    } else {
-      localStorage.removeItem('last_search_query');
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      if (searchQuery) {
+        localStorage.setItem(`last_search_query_${currentUser.uid}`, searchQuery);
+      } else {
+        localStorage.removeItem(`last_search_query_${currentUser.uid}`);
+      }
     }
   }, [searchQuery]);
 
@@ -512,11 +502,14 @@ export default function App() {
     modified = false, 
     original: DataRow[] | null = null
   ) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
     try {
       const dbRequest = indexedDB.open('FileSearchDB', 1);
       dbRequest.onsuccess = (e: any) => {
-        const db = e.target.result;
-        const transaction = db.transaction(['files'], 'readwrite');
+        const dbView = e.target.result;
+        const transaction = dbView.transaction(['files'], 'readwrite');
         const store = transaction.objectStore('files');
         
         // Ensure we always have some original data to save
@@ -525,7 +518,7 @@ export default function App() {
           : (originalData && originalData.length > 0 ? originalData : fileData);
 
         store.put({
-          id: 'current_file',
+          id: `user_file_${currentUser.uid}`,
           data: fileData,
           originalData: dataToSaveAsOriginal,
           headers: fileHeaders,
@@ -543,14 +536,19 @@ export default function App() {
 
   // Clear IndexedDB helper
   const removeFromDB = () => {
-    localStorage.removeItem('last_search_query');
+    const user = auth.currentUser;
+    if (user) {
+      localStorage.removeItem(`last_search_query_${user.uid}`);
+    }
     try {
       const dbRequest = indexedDB.open('FileSearchDB', 1);
       dbRequest.onsuccess = (e: any) => {
-        const db = e.target.result;
-        const transaction = db.transaction(['files'], 'readwrite');
+        const dbView = e.target.result;
+        const transaction = dbView.transaction(['files'], 'readwrite');
         const store = transaction.objectStore('files');
-        store.delete('current_file');
+        if (user) {
+          store.delete(`user_file_${user.uid}`);
+        }
       };
     } catch (e) {
       console.error('Failed to delete from DB:', e);
@@ -905,69 +903,54 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6" dir="rtl">
         <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="max-w-md w-full bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 text-center"
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="max-w-md w-full bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-10 text-center"
         >
-          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+          <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-8 ring-8 ring-indigo-50/50">
             <Lock size={40} />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 mb-2 font-sans">غير مصرح لك بالدخول</h1>
           
-          {!user?.email && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-700 text-xs p-4 rounded-xl mb-4 text-right">
-              <p className="font-bold flex items-center gap-2 mb-1">
-                <ShieldAlert size={14} />
-                تنبيه: لم يتم العثور على بريد إلكتروني
-              </p>
-              <p>يبدو أن المتصفح يمنع مشاركة بريدك الإلكتروني. يرجى محاولة فتح التطبيق في نافذة جديدة أو متصفح آخر.</p>
-            </div>
-          )}
-
-          <p className="text-slate-500 text-sm mb-6 leading-relaxed">
-            عذراً، هذا البريد الإلكتروني غير مضاف في قائمة المصرح لهم بالدخول إلى النظام.
+          <h1 className="text-2xl font-bold text-slate-800 mb-4 font-sans tracking-tight">الدخول غير مصرح به</h1>
+          
+          <p className="text-slate-500 text-sm mb-8 leading-relaxed px-4">
+            عذراً، هذا البريد الإلكتروني غير مضاف في قائمة المصرح لهم بالدخول.
+            يرجى التواصل مع مسؤول النظام لطلب صلاحية الوصول.
           </p>
-          
-          <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100">
-            <p className="text-[10px] text-slate-400 mb-1 font-bold">الحساب المستخدم حالياً:</p>
-            <p className="text-sm font-mono text-indigo-600 font-bold break-all">{user?.email || 'لم يتم اكتشاف بريد إلكتروني'}</p>
-            <p className="text-[9px] text-slate-400 mt-1 uppercase font-bold tracking-tighter">UID: {user?.uid}</p>
+
+          <div className="bg-slate-50 rounded-2xl p-5 mb-8 border border-slate-100/80 group transition-all hover:bg-slate-100/50 duration-500">
+            <p className="text-[10px] text-slate-400 mb-2 font-bold uppercase tracking-widest">للتواصل مع المالك</p>
+            <a 
+              href="mailto:langmix2@gmail.com" 
+              className="text-indigo-600 font-bold hover:underline break-all block text-lg font-mono"
+            >
+              langmix2@gmail.com
+            </a>
           </div>
 
-          <div className="flex flex-col gap-3">
-            <button 
-              onClick={handleRefreshAuth}
-              disabled={isCheckingAuth}
-              className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 disabled:opacity-50"
-            >
-              {isCheckingAuth ? (
-                <RefreshCw size={18} className="animate-spin" />
-              ) : (
-                <Database size={18} />
-              )}
-              {isCheckingAuth ? 'جاري التحديث...' : 'تحديث حالة التصريح'}
-            </button>
-            
+          <div className="flex flex-col gap-4">
             <button 
               onClick={login}
-              className="w-full h-12 bg-white text-slate-700 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+              className="w-full h-14 bg-indigo-600 text-white rounded-2xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-100"
             >
-              <User size={18} />
-              تبديل الحساب / إعادة الدخول
+              <User size={20} />
+              تبديل الحساب
             </button>
 
             <button 
               onClick={() => auth.signOut()}
-              className="w-full h-12 bg-red-50 text-red-600 rounded-xl font-bold hover:bg-red-100 transition-all flex items-center justify-center gap-2"
+              className="w-full h-14 bg-white text-red-500 border border-red-100 rounded-2xl font-bold hover:bg-red-50 transition-all flex items-center justify-center gap-2"
             >
-              <LogOut size={18} />
+              <LogOut size={20} />
               تسجيل الخروج
             </button>
           </div>
           
-          <p className="mt-8 text-[10px] text-slate-400">
-            يرجى التواصل مع مسؤول النظام لإضافة بريدك الإلكتروني.
-          </p>
+          <div className="mt-8 pt-8 border-t border-slate-50">
+            <p className="text-[10px] text-slate-300 font-mono uppercase tracking-tighter uppercase">
+              Current ID: {user?.uid?.slice(0, 8)}...
+            </p>
+          </div>
         </motion.div>
       </div>
     );
@@ -1124,31 +1107,6 @@ export default function App() {
                       {isAddingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'إضافة'}
                     </button>
                   </div>
-                  
-                  <div className="flex items-center gap-4 px-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input 
-                        type="radio" 
-                        name="role"
-                        value="visitor"
-                        checked={newRole === 'visitor'} 
-                        onChange={() => setNewRole('visitor')}
-                        className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <span className="text-[11px] font-bold text-slate-600">زائر</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input 
-                        type="radio" 
-                        name="role"
-                        value="admin"
-                        checked={newRole === 'admin'} 
-                        onChange={() => setNewRole('admin')}
-                        className="w-4 h-4 text-indigo-600 focus:ring-indigo-500"
-                      />
-                      <span className="text-[11px] font-bold text-slate-600">أدمن</span>
-                    </label>
-                  </div>
                 </div>
               </div>
 
@@ -1180,13 +1138,6 @@ export default function App() {
                           <Trash2 size={12} />
                           <span>حذف</span>
                         </button>
-                      </div>
-                      <div className="flex gap-2 mt-1 border-t border-slate-50 pt-2">
-                        {item.role === 'admin' ? (
-                          <span className="text-[9px] bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold">أدمن</span>
-                        ) : (
-                          <span className="text-[9px] bg-slate-50 text-slate-600 px-1.5 py-0.5 rounded font-bold">زائر</span>
-                        )}
                       </div>
                     </div>
                   ))

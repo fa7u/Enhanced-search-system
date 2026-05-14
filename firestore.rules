@@ -14,21 +14,13 @@ service cloud.firestore {
     function isAdmin() {
        return isSignedIn() && (
          (request.auth.token.email != null && request.auth.token.email.lower() == "langmix2@gmail.com") ||
-         (request.auth.uid == "acCG3siZciQkWN7jRj5FXwGtDCf2") ||
-         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-         (request.auth.token.email != null && 
-          exists(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())) &&
-          get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.role == "admin") ||
-         (request.auth.token.email_verified == true && request.auth.token.email != null && 
-          exists(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())) &&
-          get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.role == "admin")
+         (request.auth.uid == "acCG3siZciQkWN7jRj5FXwGtDCf2")
        );
     }
 
     function isValidWhitelistEntry(data) {
       return data.email is string && data.email.lower().size() <= 256 &&
-             data.addedAt is timestamp &&
-             data.role in ["admin", "visitor"];
+             data.addedAt is timestamp;
     }
 
     // Whitelist collection
