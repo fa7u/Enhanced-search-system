@@ -32,7 +32,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { getFirestore, doc, getDocFromServer, getDoc } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import firebaseConfig from '@/firebase-applet-config.json';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -333,6 +333,7 @@ export default function App() {
         console.warn('Login cancelled by user');
       } else {
         console.error('Login Error:', error);
+        alert(`حدث خطأ أثناء تسجيل الدخول: ${error.message}\nكود الخطأ: ${error.code}`);
       }
     } finally {
       setIsLoadingAuth(false);
