@@ -14,14 +14,14 @@ service cloud.firestore {
     function isAdmin() {
        // Check by email for the bootstrap admin and role in whitelist
        return isSignedIn() && (
-         request.auth.token.email == "langmix2@gmail.com" ||
+         request.auth.token.email.lower() == "langmix2@gmail.com" ||
          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-         get(/databases/$(database)/documents/whitelist/$(request.auth.token.email)).data.role == "admin"
+         get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.role == "admin"
        );
     }
 
     function isValidWhitelistEntry(data) {
-      return data.email is string && data.email.size() <= 256 &&
+      return data.email is string && data.email.lower().size() <= 256 &&
              data.addedAt is timestamp &&
              data.role in ["admin", "visitor"];
     }
@@ -29,7 +29,7 @@ service cloud.firestore {
     // Whitelist collection
     match /whitelist/{email} {
       // Users can check their own status
-      allow get: if isSignedIn() && request.auth.token.email == email;
+      allow get: if isSignedIn() && request.auth.token.email.lower() == email;
       
       // Admins can manage the list
       allow list: if isAdmin();

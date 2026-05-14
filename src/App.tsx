@@ -287,9 +287,17 @@ export default function App() {
     const email = rawEmail.trim().toLowerCase();
     console.log("Checking authorization for email:", email);
     
+    if (!email) {
+      console.warn("Auth check: Email is empty");
+      setIsAuthorized(false);
+      setIsCheckingAuth(false);
+      return;
+    }
+
     try {
       // 1. Validation check for owner (langmix2@gmail.com)
       if (email === 'langmix2@gmail.com') {
+        console.log("User identified as system owner");
         setIsAuthorized(true);
         setIsAdmin(true);
         setIsCheckingAuth(false);
@@ -301,31 +309,33 @@ export default function App() {
         const uid = auth.currentUser?.uid;
         if (uid) {
           const adminRef = doc(db, 'admins', uid);
-          const adminSnap = await getDoc(adminRef);
+          const adminSnap = await getDocFromServer(adminRef);
           if (adminSnap.exists()) {
             setIsAdmin(true);
-            console.log("User identified as system admin");
+            console.log("User identified as system admin via Firestore");
           }
         }
       } catch (adminErr) {
-        console.warn("Admin check failed:", adminErr);
+        console.warn("Admin check failed (non-critical):", adminErr);
       }
 
       // 2. Database check for whitelist
       const docRef = doc(db, 'whitelist', email);
-      const docSnap = await getDoc(docRef);
+      const docSnap = await getDocFromServer(docRef);
       
       if (docSnap.exists()) {
         const data = docSnap.data();
+        console.log("Authorization success: user found in whitelist with role:", data?.role);
         if (data?.role === 'admin') {
           setIsAdmin(true);
         }
         setIsAuthorized(true);
       } else {
+        console.warn("Authorization failed: email not found in whitelist:", email);
         setIsAuthorized(false);
       }
     } catch (error) {
-      console.error('Auth Check Error:', error);
+      console.error('Auth Check Error Detail:', error);
       const path = `whitelist/${email}`;
       // Catch permission errors as per integration guide
       if (error instanceof Error && (error.message.includes('permission') || (error as any).code === 'permission-denied')) {
@@ -370,12 +380,9 @@ export default function App() {
   const fetchWhitelist = async () => {
     if (!isAdmin) return;
     try {
-      // Since we can't use 'list' without admin rules working perfectly, 
-      // in a real app you'd use a server function or careful queries.
-      // For now we'll assume the admin knows who they added or we can try to get the collection.
       // Note: Firestore 'list' requires allow list: if isAdmin()
-      const { collection, getDocs } = await import('firebase/firestore');
-      const querySnapshot = await getDocs(collection(db, 'whitelist'));
+      const { collection, getDocsFromServer } = await import('firebase/firestore');
+      const querySnapshot = await getDocsFromServer(collection(db, 'whitelist'));
       const list = querySnapshot.docs.map(doc => doc.data() as {email: string, addedAt: any, role: 'admin' | 'visitor'});
       setWhitelist(list);
     } catch (error) {
