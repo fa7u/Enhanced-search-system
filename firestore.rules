@@ -18,6 +18,9 @@ service cloud.firestore {
          exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
          (request.auth.token.email != null && 
           exists(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())) &&
+          get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.role == "admin") ||
+         (request.auth.token.email_verified == true && request.auth.token.email != null && 
+          exists(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())) &&
           get(/databases/$(database)/documents/whitelist/$(request.auth.token.email.lower())).data.role == "admin")
        );
     }

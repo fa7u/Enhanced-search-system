@@ -343,7 +343,6 @@ export default function App() {
       }
       
       // 2. Multi-pronged Check
-      // We'll check admins AND whitelist concurrently
       console.log("Starting database checks...");
       try {
         const uid = currentUser.uid;
@@ -359,26 +358,33 @@ export default function App() {
         ]);
 
         let hasAccess = false;
+        let isSystemAdmin = false;
 
         if (adminSnap?.exists()) {
-          console.log("Access granted: Found in admins collection");
-          setIsAdmin(true);
+          console.log("Access granted: Found in admins collection (UID match)");
+          isSystemAdmin = true;
           hasAccess = true;
         }
 
         if (whitelistSnap?.exists()) {
           const data = whitelistSnap.data();
-          console.log("Access granted: Found in whitelist collection:", data);
+          console.log("Whitelist record data:", data);
           if (data?.role === 'admin') {
-            setIsAdmin(true);
+            console.log("Access granted: Whitelist role is admin");
+            isSystemAdmin = true;
           }
           hasAccess = true;
         }
 
+        if (isSystemAdmin) {
+          setIsAdmin(true);
+        }
+
         if (hasAccess) {
+          console.log("Authorization Result: GRANTED");
           setIsAuthorized(true);
         } else {
-          console.warn(`No record found for ${email} in whitelist.`);
+          console.warn(`Authorization Result: REJECTED (Email ${email} not found in whitelist)`);
           setIsAuthorized(false);
         }
       } catch (innerError: any) {
