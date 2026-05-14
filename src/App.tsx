@@ -297,9 +297,9 @@ export default function App() {
     try {
       // 1. Validation check for owner (langmix2@gmail.com)
       if (email === 'langmix2@gmail.com') {
-        console.log("User identified as system owner");
-        setIsAuthorized(true);
+        console.log("Identifying as system owner:", email);
         setIsAdmin(true);
+        setIsAuthorized(true);
         setIsCheckingAuth(false);
         return;
       }
@@ -312,7 +312,7 @@ export default function App() {
           const adminSnap = await getDocFromServer(adminRef);
           if (adminSnap.exists()) {
             setIsAdmin(true);
-            console.log("User identified as system admin via Firestore");
+            console.log("User identified as system admin via Firestore UID");
           }
         }
       } catch (adminErr) {
@@ -320,18 +320,19 @@ export default function App() {
       }
 
       // 2. Database check for whitelist
+      // Ensure we are fetching specifically from the server to avoid cache issues
       const docRef = doc(db, 'whitelist', email);
       const docSnap = await getDocFromServer(docRef);
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Authorization success: user found in whitelist with role:", data?.role);
+        console.log("Whitelist found in Firestore for:", email, "Role:", data?.role);
         if (data?.role === 'admin') {
           setIsAdmin(true);
         }
         setIsAuthorized(true);
       } else {
-        console.warn("Authorization failed: email not found in whitelist:", email);
+        console.warn("Auth check failed: Email not found in Firestore 'whitelist' collection:", email);
         setIsAuthorized(false);
       }
     } catch (error) {
@@ -345,6 +346,12 @@ export default function App() {
       setIsAuthorized(false);
     } finally {
       setIsCheckingAuth(false);
+    }
+  };
+
+  const handleRefreshAuth = () => {
+    if (user?.email) {
+      checkAuthorization(user.email);
     }
   };
 
@@ -397,14 +404,17 @@ export default function App() {
     const path = `whitelist/${email}`;
     try {
       const { setDoc, serverTimestamp } = await import('firebase/firestore');
-      await setDoc(doc(db, 'whitelist', email), {
+      const docRef = doc(db, 'whitelist', email);
+      await setDoc(docRef, {
         email,
         addedAt: serverTimestamp(),
         role: newRole
       });
+      console.log("Successfully added to whitelist in Firestore:", email);
       setNewEmail('');
       setNewRole('visitor');
       await fetchWhitelist();
+      alert(`تمت إضافة ${email} بنجاح إلى قاعدة البيانات`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     } finally {
@@ -841,49 +851,46 @@ export default function App() {
 
   if (isAuthorized === false) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center font-sans p-6" dir="rtl">
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6" dir="rtl">
         <motion.div 
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white p-10 rounded-[2.5rem] shadow-2xl border border-red-100 max-w-md w-full text-center"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="max-w-md w-full bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-8 text-center"
         >
-          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-8">
-            <ShieldAlert size={40} />
+          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <Lock size={40} />
           </div>
-          <h1 className="text-2xl font-black text-slate-800 mb-2">غير مصرح لك بالدخول</h1>
-          <p className="text-sm font-bold text-red-500 mb-6 px-4 py-2 bg-red-50 rounded-lg inline-block">
-            {user.email}
-          </p>
-          <p className="text-slate-500 mb-8 leading-relaxed">
-            عذراً، هذا البريد الإلكتروني غير موجود في قائمة المصرح لهم بالدخول. يرجى التواصل مع مالك النظام للاشتراك وتفعيل حسابك.
+          <h1 className="text-2xl font-bold text-slate-800 mb-2 font-sans">غير مصرح لك بالدخول</h1>
+          <p className="text-slate-500 text-sm mb-6 leading-relaxed">
+            عذراً، هذا البريد الإلكتروني غير مضاف في قائمة المصرح لهم بالدخول إلى النظام.
           </p>
           
-          <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 mb-8 text-right">
-            <p className="text-xs font-bold text-slate-400 mb-3 uppercase tracking-wider">وسيلة التواصل مع المالك:</p>
-            <div className="flex items-center gap-3 text-slate-700 font-bold mb-2">
-              <Mail size={18} className="text-indigo-500" />
-              <span>langmix2@gmail.com</span>
-            </div>
-            <div className="flex items-center gap-3 text-slate-700 font-bold">
-              <Phone size={18} className="text-indigo-500" />
-              <span>+966 5x xxx xxxx</span>
-            </div>
+          <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100">
+            <p className="text-[10px] text-slate-400 mb-1 font-bold">بريدك الحالي:</p>
+            <p className="text-sm font-mono text-indigo-600 font-bold break-all">{user?.email}</p>
           </div>
 
           <div className="flex flex-col gap-3">
             <button 
-              onClick={() => checkAuthorization(user.email || '')}
-              className="w-full py-4 bg-slate-800 text-white rounded-2xl font-bold hover:bg-slate-900 transition-all"
+              onClick={handleRefreshAuth}
+              disabled={isCheckingAuth}
+              className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              إعادة التحقق من القائمة
+              {isCheckingAuth ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Database size={18} />}
+              تحديث الحالة
             </button>
             <button 
-              onClick={logout}
-              className="w-full py-4 bg-slate-100 text-slate-600 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+              onClick={() => auth.signOut()}
+              className="w-full h-12 bg-white text-slate-600 border border-slate-200 rounded-xl font-bold hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
             >
-              تسجيل خروج
+              <LogOut size={18} />
+              تسجيل الخروج
             </button>
           </div>
+          
+          <p className="mt-8 text-[10px] text-slate-400">
+            يرجى التواصل مع مسؤول النظام لإضافة بريدك الإلكتروني.
+          </p>
         </motion.div>
       </div>
     );
