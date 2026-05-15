@@ -1044,7 +1044,7 @@ export default function App() {
     const settledLabel = isExportAll ? "المسدد الإجمالي" : "المسدد للنتائج الحالية";
 
     headers.forEach((h) => {
-      if (amountCol) {
+      if (h === totals.amountCol) {
         summaryRowData[h] = `إجمالي المبلغ: ${exportAmount.toLocaleString(locale)} ر.س`;
       } else if (h === totals.remainingCol) {
         summaryRowData[h] = `إجمالي المتبقي: ${exportRemaining.toLocaleString(locale)} ر.س`;
@@ -1117,8 +1117,21 @@ export default function App() {
     XLSX.utils.book_append_sheet(workbook, worksheet, "البيانات المعدلة");
     const dateStr = new Date().toISOString().split('T')[0];
     const fileNameSafe = (fileName || 'بيانات').replace(/[\\/:*?"<>|]/g, '_');
-    const suffix = isExportAll ? 'الكل_معدل' : 'نتائج_البحث';
-    XLSX.writeFile(workbook, `سجلات_${fileNameSafe}_${suffix}_${dateStr}.xlsx`);
+    
+    const filterNames: Record<string, string> = {
+      all: 'الكل',
+      paid: 'المسدد',
+      modified: 'المعدلة',
+      normal: 'النتائج'
+    };
+
+    const searchPart = searchQuery.trim() ? `_بحث_${searchQuery.trim()}` : '';
+    const filterPart = filterType !== 'all' ? `_فلتر_${filterNames[filterType] || filterType}` : '';
+    const suffix = isExportAll ? 'الكل' : 'نتائج';
+
+    const finalFileName = `سجلات_${fileNameSafe}${searchPart}${filterPart}_${suffix}_${dateStr}.xlsx`.replace(/[\\/:*?"<>|]/g, '_');
+    
+    XLSX.writeFile(workbook, finalFileName);
   };
 
   if (isCheckingAuth) {
