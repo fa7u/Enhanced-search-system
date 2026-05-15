@@ -122,8 +122,9 @@ export default function App() {
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
-  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean}[]>([]);
+  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[]>([]);
   const [newEmail, setNewEmail] = useState('');
+  const [newName, setNewName] = useState('');
   const [newRole, setNewRole] = useState<'admin' | 'visitor'>('visitor');
   const [isAddingEmail, setIsAddingEmail] = useState(false);
   const [emailToDelete, setEmailToDelete] = useState<string | null>(null);
@@ -394,7 +395,7 @@ export default function App() {
       }
 
       // 1. Owner Hardcoded Check (Admin privileges ONLY for owner)
-      if (email === 'langmix2@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+      if (email === 'fahussein79@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
         console.log("Owner admin detected");
         setIsAdmin(true);
         setIsAuthorized(true);
@@ -495,7 +496,7 @@ export default function App() {
       const list = querySnapshot.docs.map(doc => ({
         ...doc.data(),
         email: doc.id
-      })) as {email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean}[];
+      })) as {email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[];
       setWhitelist(list);
     } catch (error) {
       console.error('Fetch Whitelist Error:', error);
@@ -518,7 +519,7 @@ export default function App() {
   };
 
   const addToWhitelist = async () => {
-    if (!newEmail.trim() || !isAdmin) return;
+    if (!newEmail.trim() || !newName.trim() || !isAdmin) return;
     setIsAddingEmail(true);
     const email = newEmail.trim().toLowerCase();
     const path = `whitelist/${email}`;
@@ -527,12 +528,14 @@ export default function App() {
       const docRef = doc(db, 'whitelist', email);
       await setDoc(docRef, {
         email,
+        name: newName.trim(),
         addedAt: serverTimestamp(),
         role: 'visitor',
         isFrozen: false
       });
       console.log("Successfully added to whitelist in Firestore:", email);
       setNewEmail('');
+      setNewName('');
       await fetchWhitelist();
       alert(`تمت إضافة ${email} بنجاح إلى قاعدة البيانات`);
     } catch (error) {
@@ -1030,6 +1033,29 @@ export default function App() {
           <p className="text-slate-500 mb-8 leading-relaxed">
             هذا النظام مخصص للأشخاص المصرح لهم فقط. يرجى تسجيل الدخول للوصول إلى بياناتك.
           </p>
+
+          <div className="bg-slate-50 rounded-2xl p-6 mb-8 border border-slate-100/80 group transition-all hover:bg-slate-100/50 duration-500 text-center">
+            <p className="text-[10px] text-slate-400 mb-4 font-bold uppercase tracking-widest">للتواصل مع المالك للتفعيل</p>
+            <div className="flex flex-col gap-3">
+              <a 
+                href="mailto:fahussein79@gmail.com" 
+                className="flex items-center justify-center gap-3 text-indigo-600 font-bold hover:underline break-all bg-white p-3 rounded-xl shadow-sm border border-slate-50 text-sm"
+              >
+                <Mail size={16} />
+                <span className="font-mono">fahussein79@gmail.com</span>
+              </a>
+              <a 
+                href="https://wa.me/966550665495"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-3 text-emerald-600 font-bold hover:underline bg-white p-3 rounded-xl shadow-sm border border-slate-50 text-sm"
+              >
+                <Phone size={16} />
+                <span className="font-mono">0550665495</span>
+              </a>
+            </div>
+          </div>
+
           <button 
             onClick={login}
             disabled={isLoadingAuth}
@@ -1068,14 +1094,26 @@ export default function App() {
             يرجى التواصل مع مسؤول النظام لطلب صلاحية الوصول.
           </p>
 
-          <div className="bg-slate-50 rounded-2xl p-5 mb-8 border border-slate-100/80 group transition-all hover:bg-slate-100/50 duration-500">
-            <p className="text-[10px] text-slate-400 mb-2 font-bold uppercase tracking-widest">للتواصل مع المالك</p>
-            <a 
-              href="mailto:langmix2@gmail.com" 
-              className="text-indigo-600 font-bold hover:underline break-all block text-lg font-mono"
-            >
-              langmix2@gmail.com
-            </a>
+          <div className="bg-slate-50 rounded-2xl p-6 mb-8 border border-slate-100/80 group transition-all hover:bg-slate-100/50 duration-500 text-center">
+            <p className="text-[10px] text-slate-400 mb-4 font-bold uppercase tracking-widest">للتواصل مع المالك للتفعيل</p>
+            <div className="space-y-4">
+              <a 
+                href="mailto:fahussein79@gmail.com" 
+                className="flex items-center justify-center gap-3 text-indigo-600 font-bold hover:underline break-all bg-white p-3 rounded-xl shadow-sm border border-slate-50"
+              >
+                <Mail size={18} />
+                <span className="text-base font-mono">fahussein79@gmail.com</span>
+              </a>
+              <a 
+                href="https://wa.me/966550665495"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-3 text-emerald-600 font-bold hover:underline bg-white p-3 rounded-xl shadow-sm border border-slate-50"
+              >
+                <Phone size={18} />
+                <span className="text-base font-mono">0550665495</span>
+              </a>
+            </div>
           </div>
 
           <div className="flex flex-col gap-4">
@@ -1108,6 +1146,28 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans" dir="rtl">
+      {/* Header Banner for Frozen Accounts */}
+      {isFrozen && (
+        <div className="bg-red-600 text-white px-4 py-3 text-center flex items-center justify-center gap-4 animate-in slide-in-from-top duration-500 sticky top-0 z-[60]">
+          <div className="flex items-center gap-2 font-black text-sm">
+            <ShieldAlert size={20} className="animate-pulse" />
+            <span>تنبيه: حسابك مجمد حالياً!</span>
+          </div>
+          <div className="h-4 w-[1px] bg-white/30 hidden sm:block"></div>
+          <p className="text-xs font-bold hidden sm:block">يرجى التواصل مع المالك لتفعيل الحساب واستعادة كامل الصلاحيات</p>
+          <div className="flex items-center gap-4 mr-auto sm:mr-0">
+            <a href="mailto:fahussein79@gmail.com" className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-all text-[10px] font-black border border-white/10 uppercase tracking-tighter">
+              <Mail size={12} />
+              الايميل
+            </a>
+            <a href="https://wa.me/966550665495" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-all text-[10px] font-black border border-white/10 uppercase tracking-tighter">
+              <Phone size={12} />
+              واتساب
+            </a>
+          </div>
+        </div>
+      )}
+
       {/* Top Navigation Bar */}
       <nav className="h-16 bg-white border-b border-slate-200 px-6 md:px-8 flex items-center justify-between shadow-sm shrink-0 sticky top-0 z-50">
         <div className="flex items-center gap-3">
@@ -1232,19 +1292,32 @@ export default function App() {
               </div>
 
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-                <p className="text-xs font-bold text-slate-500 mb-3">إضافة بريد جديد:</p>
-                <div className="flex flex-col gap-4">
-                  <div className="flex gap-2">
+                <p className="text-xs font-bold text-slate-500 mb-3">إضافة مستخدم جديد:</p>
+                <div className="flex flex-col gap-3">
+                  <div className="relative">
                     <input 
-                      type="email" 
-                      placeholder="example@gmail.com"
-                      value={newEmail}
-                      onChange={(e) => setNewEmail(e.target.value)}
-                      className="flex-1 h-11 px-4 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      type="text" 
+                      placeholder="اسم صاحب الحساب"
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
                     />
+                    <User size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="flex-1 relative">
+                      <input 
+                        type="email" 
+                        placeholder="example@gmail.com"
+                        value={newEmail}
+                        onChange={(e) => setNewEmail(e.target.value)}
+                        className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <Mail size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                    </div>
                     <button 
                       onClick={addToWhitelist}
-                      disabled={isAddingEmail || !newEmail.trim()}
+                      disabled={isAddingEmail || !newEmail.trim() || !newName.trim()}
                       className="px-6 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center min-w-[80px]"
                     >
                       {isAddingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'إضافة'}
@@ -1262,31 +1335,41 @@ export default function App() {
                   </div>
                 ) : (
                   whitelist.map((item) => (
-                    <div key={item.email} className="flex flex-col gap-2 p-3 bg-white border border-slate-100 rounded-2xl group hover:border-indigo-100 transition-all">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                          <div className="w-8 h-8 bg-indigo-50 text-indigo-500 rounded-lg flex items-center justify-center flex-shrink-0">
-                            <Mail size={14} />
+                    <div key={item.email} className="p-4 bg-white border border-slate-100 rounded-[2rem] group hover:border-indigo-100 transition-all shadow-sm">
+                      <div className="flex flex-col gap-4">
+                        {/* Top: User Info */}
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-inner">
+                            <Mail size={18} />
                           </div>
-                          <div className="overflow-hidden">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-bold text-slate-700 truncate">{item.email}</p>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center flex-wrap gap-2">
+                              <p className="text-sm font-black text-slate-800 truncate">{item.name || 'مستخدم بدون اسم'}</p>
                               {item.isFrozen && (
-                                <span className="bg-red-100 text-red-600 text-[9px] px-1.5 py-0.5 rounded-full font-black">مجمد</span>
+                                <span className="bg-red-50 text-red-600 text-[9px] px-2 py-0.5 rounded-full font-black border border-red-100">مجمد</span>
                               )}
                             </div>
-                            <p className="text-[10px] text-slate-400">مضاف منذ: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}</p>
+                            <p className="text-[10px] text-slate-500 font-bold truncate break-all">{item.email}</p>
+                            <p className="text-[10px] text-slate-400 font-bold mt-1">
+                              مضاف منذ {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}
+                            </p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+
+                        {/* Bottom: Actions */}
+                        <div className="flex items-center gap-2 pt-3 border-t border-slate-50">
                           <button 
                             onClick={() => toggleFreezeStatus(item.email, !!item.isFrozen)}
-                            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all font-bold text-xs border shadow-sm ${item.isFrozen ? 'text-emerald-600 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' : 'text-orange-600 bg-orange-50 border-orange-100 hover:bg-orange-100'}`}
-                            title={item.isFrozen ? "إلغاء تجميد الحساب" : "تجميد الحساب مؤقتاً"}
+                            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl transition-all font-black text-[11px] border shadow-sm active:scale-95 ${
+                              item.isFrozen 
+                                ? 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' 
+                                : 'text-orange-700 bg-orange-50 border-orange-100 hover:bg-orange-100'
+                            }`}
                           >
                             {item.isFrozen ? <CheckCircle size={14} /> : <ShieldAlert size={14} />}
-                            <span>{item.isFrozen ? 'تفعيل' : 'تجميد'}</span>
+                            <span>{item.isFrozen ? 'تفعيل الحساب' : 'تجميد الحساب'}</span>
                           </button>
+                          
                           <button 
                             type="button"
                             onClick={(e) => {
@@ -1294,10 +1377,9 @@ export default function App() {
                               e.stopPropagation();
                               setEmailToDelete(item.email);
                             }}
-                            className="flex items-center gap-2 px-4 py-2 rounded-xl text-red-600 bg-red-50 hover:bg-red-100 active:scale-95 transition-all font-black text-xs border border-red-200 shadow-sm z-50 cursor-pointer"
-                            title="حذف هذا الحساب نهائياً"
+                            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-red-700 bg-red-50 border border-red-100 hover:bg-red-100 active:scale-95 transition-all font-black text-[11px] shadow-sm"
                           >
-                            <Trash2 size={16} />
+                            <Trash2 size={14} />
                             <span>حذف</span>
                           </button>
                         </div>
@@ -1389,7 +1471,7 @@ export default function App() {
             <div 
               onClick={() => {
                 if (isFrozen) {
-                  alert('حسابك مجمد. يرجى التواصل مع مالك النظام لتفعيل الحساب.');
+                  alert('عذراً، حسابك مجمد. يرجى التواصل مع مالك النظام لتفعيل الحساب.\n\nالإيميل: fahussein79@gmail.com\nواتساب: 0550665495');
                   return;
                 }
                 if (isAuthorized) {
@@ -1407,9 +1489,15 @@ export default function App() {
                 {isFrozen ? 'الحساب مجمد' : 'اضغط لرفع ملف Excel'}
               </p>
               {isFrozen && (
-                <p className="text-[10px] text-red-600 font-black mt-2 leading-relaxed px-4">
-                  عذراً، لا يمكنك رفع ملفات لأن حسابك مجمد. <br/> يرجى التواصل مع المالك.
-                </p>
+                <div className="mt-3 px-4">
+                  <p className="text-[10px] text-red-600 font-black leading-relaxed mb-2">
+                    عذراً، لا يمكنك رفع ملفات لأن حسابك مجمد.
+                  </p>
+                  <div className="flex flex-col items-center gap-1 opacity-80">
+                    <p className="text-[10px] font-bold text-slate-500 font-mono">fahussein79@gmail.com</p>
+                    <p className="text-[10px] font-bold text-slate-500 font-mono">0550665495</p>
+                  </div>
+                </div>
               )}
               {!isFrozen && !isAuthorized && <p className="text-[10px] text-red-500 font-bold mt-2">غير مصرح لك بالرفع</p>}
               <p className="text-xs text-slate-400 mt-1">يدعم XLSX, XLS, CSV</p>
