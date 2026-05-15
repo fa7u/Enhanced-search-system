@@ -395,7 +395,7 @@ export default function App() {
       }
 
       // 1. Owner Hardcoded Check (Admin privileges ONLY for owner)
-      if (email === 'fahussein79@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+      if (email === 'langmix2@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
         console.log("Owner admin detected");
         setIsAdmin(true);
         setIsAuthorized(true);
@@ -1050,7 +1050,7 @@ export default function App() {
                 rel="noopener noreferrer"
                 className="flex items-center justify-center gap-3 text-emerald-600 font-bold hover:underline bg-white p-3 rounded-xl shadow-sm border border-slate-50 text-sm"
               >
-                <Phone size={16} />
+                <MessageCircle size={16} />
                 <span className="font-mono">0550665495</span>
               </a>
             </div>
@@ -1110,7 +1110,7 @@ export default function App() {
                 rel="noopener noreferrer"
                 className="flex items-center justify-center gap-3 text-emerald-600 font-bold hover:underline bg-white p-3 rounded-xl shadow-sm border border-slate-50"
               >
-                <Phone size={18} />
+                <MessageCircle size={18} />
                 <span className="text-base font-mono">0550665495</span>
               </a>
             </div>
@@ -1161,7 +1161,7 @@ export default function App() {
               الايميل
             </a>
             <a href="https://wa.me/966550665495" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-all text-[10px] font-black border border-white/10 uppercase tracking-tighter">
-              <Phone size={12} />
+              <MessageCircle size={12} />
               واتساب
             </a>
           </div>
