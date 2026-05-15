@@ -23,6 +23,10 @@ import {
   Info,
   RotateCcw,
   Check,
+  CheckCircle,
+  FileEdit,
+  LayoutGrid,
+  Circle,
   Lock,
   LogOut,
   ShieldAlert,
@@ -131,8 +135,7 @@ export default function App() {
   const [isModified, setIsModified] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const filteredData = useMemo(() => {
-    // 1. Initial filter by search query
+  const searchResults = useMemo(() => {
     let results = data.map((row, index) => ({ row, index }));
     
     if (searchQuery.trim()) {
@@ -143,22 +146,25 @@ export default function App() {
         );
       });
     }
+    return results;
+  }, [data, searchQuery]);
 
-    // 2. Filter by type (Status)
-    if (filterType !== 'all') {
-      results = results.filter(({ index }) => {
+  const filteredData = useMemo(() => {
+    if (filterType === 'all') {
+      return searchResults.map(item => item.row);
+    }
+
+    return searchResults
+      .filter(({ index }) => {
         const isPaid = paidRows.has(index);
         const isModified = modifiedRows.has(index);
         
         if (filterType === 'paid') return isPaid;
-        if (filterType === 'modified') return isModified && !isPaid;
-        if (filterType === 'normal') return !isPaid && !isModified;
+        if (filterType === 'modified') return isModified;
         return true;
-      });
-    }
-
-    return results.map(item => item.row);
-  }, [data, searchQuery, filterType, paidRows, modifiedRows]);
+      })
+      .map(item => item.row);
+  }, [searchResults, filterType, paidRows, modifiedRows]);
 
   // Financial Summary Calculation
   const totals = useMemo(() => {
@@ -205,8 +211,23 @@ export default function App() {
       }
     });
 
-    return { totalAmount, totalRemaining, totalSettledGlobal, totalSettledFiltered, amountCol, remainingCol };
-  }, [data, filteredData, headers, searchQuery, paidRows]);
+    // Calculate counts for filters based on search results
+    const counts = {
+      all: searchResults.length,
+      paid: searchResults.filter(item => paidRows.has(item.index)).length,
+      modified: searchResults.filter(item => modifiedRows.has(item.index)).length
+    };
+
+    return { 
+      totalAmount, 
+      totalRemaining, 
+      totalSettledGlobal, 
+      totalSettledFiltered, 
+      amountCol, 
+      remainingCol,
+      counts
+    };
+  }, [data, searchResults, filteredData, headers, searchQuery, filterType, paidRows, modifiedRows]);
 
   // Initialize IndexedDB and load saved data
   useEffect(() => {
@@ -693,12 +714,37 @@ export default function App() {
   const exportToExcel = (forceAll = false) => {
     if (!isAuthorized) return;
     // 1. Decide which data set to export
-    // If forceAll is true, take the entire 'data' array. 
-    // Otherwise, check if there's a search query to take filteredData.
-    const isExportAll = forceAll || !searchQuery.trim();
+    // Force all means entire file. Otherwise, we check if there is an active filter or search.
+    const hasActiveFilter = searchQuery.trim() !== '' || filterType !== 'all';
+    const isExportAll = forceAll || !hasActiveFilter;
     const dataToExport = isExportAll ? data : filteredData;
     
     if (dataToExport.length === 0) return;
+
+    // 1.1 Calculate specific totals for the exported data
+    let exportAmount = 0;
+    let exportRemaining = 0;
+    let exportSettled = 0;
+
+    dataToExport.forEach(row => {
+      const originalIdx = data.findIndex(r => r === row);
+      const isPaid = paidRows.has(originalIdx);
+
+      if (totals.amountCol) {
+        const val = parseFloat(String(row[totals.amountCol]).replace(/[^0-9.-]+/g, ''));
+        if (!isNaN(val)) exportAmount += val;
+      }
+      if (totals.remainingCol) {
+        const val = parseFloat(String(row[totals.remainingCol]).replace(/[^0-9.-]+/g, ''));
+        if (!isNaN(val)) {
+          exportRemaining += val;
+          // Only add to summary if this row is marked as settled/paid
+          if (isPaid) {
+            exportSettled += val;
+          }
+        }
+      }
+    });
 
     // 2. Create worksheet from data
     const worksheet = XLSX.utils.json_to_sheet(dataToExport);
@@ -784,21 +830,20 @@ export default function App() {
     const hasNextCol = settledColIndex < headers.length;
     const nextColHeader = hasNextCol ? headers[settledColIndex] : null;
 
-    const settledToDisplay = isExportAll ? totals.totalSettledGlobal : totals.totalSettledFiltered;
-    const settledLabel = isExportAll ? "المسدد الإجمالي" : "المسدد حالياً";
+    const settledLabel = isExportAll ? "المسدد الإجمالي" : "المسدد للنتائج الحالية";
 
     headers.forEach((h) => {
       if (h === totals.amountCol) {
-        summaryRowData[h] = `إجمالي المبلغ: ${totals.totalAmount.toLocaleString('ar-SA')} ر.س`;
+        summaryRowData[h] = `إجمالي المبلغ: ${exportAmount.toLocaleString('ar-SA')} ر.س`;
       } else if (h === totals.remainingCol) {
-        summaryRowData[h] = `إجمالي المتبقي: ${totals.totalRemaining.toLocaleString('ar-SA')} ر.س`;
+        summaryRowData[h] = `إجمالي المتبقي: ${exportRemaining.toLocaleString('ar-SA')} ر.س`;
         // If we can't use next column, append it here
-        if (!nextColHeader && settledToDisplay > 0) {
-          summaryRowData[h] += ` | ${settledLabel}: ${settledToDisplay.toLocaleString('ar-SA')} ر.س`;
+        if (!nextColHeader && exportSettled > 0) {
+          summaryRowData[h] += ` | ${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
         }
-      } else if (nextColHeader && h === nextColHeader && settledToDisplay > 0) {
+      } else if (nextColHeader && h === nextColHeader && exportSettled > 0) {
         // If the column after 'remaining' is available, use it for settled amount to avoid overlap
-        summaryRowData[h] = `${settledLabel}: ${settledToDisplay.toLocaleString('ar-SA')} ر.س`;
+        summaryRowData[h] = `${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
       } else if (h === headers[0]) {
         summaryRowData[h] = '--- الملخص الإجمالي ---';
       } else {
@@ -821,7 +866,7 @@ export default function App() {
           worksheet[address].s = highlightStyle("4F46E5"); 
         } else if (header === totals.remainingCol) {
           worksheet[address].s = highlightStyle("EA580C"); 
-        } else if (nextColHeader && header === nextColHeader && settledToDisplay > 0) {
+        } else if (nextColHeader && header === nextColHeader && exportSettled > 0) {
           worksheet[address].s = highlightStyle("10B981"); // Emerald 500 for settled
         } else {
           worksheet[address].s = summaryStyle;
@@ -1340,14 +1385,6 @@ export default function App() {
                 <h3 className="text-xl font-bold text-slate-800 mb-2">ابدأ برفع ملف للبحث</h3>
                 <p className="text-slate-500 max-w-sm">ارفع ملف إكسل يحتوي على بياناتك، وسنساعدك في البحث عنها بسرعة فائقة.</p>
               </div>
-            ) : !searchQuery && filterType === 'all' ? (
-              <div className="flex-1 flex flex-col items-center justify-center bg-white rounded-3xl border border-slate-200 shadow-sm text-center p-8">
-                <div className="w-20 h-20 bg-indigo-50 rounded-full flex items-center justify-center mb-6 text-indigo-300">
-                  <Search size={48} strokeWidth={1} />
-                </div>
-                <h3 className="text-xl font-bold text-slate-800 mb-2">اكتب شيئاً للبحث عنه</h3>
-                <p className="text-slate-500 max-w-sm">أدخل أي معلومة للبحث عنها بداخل كافة بيانات الملف المرفوع (اسم الشخص، العقار، رقم الجوال، وغيرها).</p>
-              </div>
             ) : filteredData.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center bg-white rounded-3xl border border-slate-200 shadow-sm text-center p-8">
                 <div className="w-20 h-20 bg-red-50 rounded-full flex items-center justify-center mb-6 text-red-300">
@@ -1386,33 +1423,38 @@ export default function App() {
                   </div>
                   
                   {/* Filter Controls */}
-                  <div className="flex flex-wrap items-center gap-2 bg-slate-100/50 p-1 rounded-xl border border-slate-200">
+                  <div className="flex flex-wrap items-center gap-2 bg-white/80 backdrop-blur-sm p-1.5 rounded-2xl border border-slate-200 shadow-sm overflow-x-auto max-w-full">
                     <button 
                       onClick={() => setFilterType('all')}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${filterType === 'all' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${filterType === 'all' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-100 scale-105' : 'text-slate-500 hover:bg-slate-100'}`}
                     >
-                      الكل
+                      <LayoutGrid size={14} />
+                      <span>الكل</span>
+                      <span className={`px-1.5 py-0.5 rounded-lg text-[10px] ${filterType === 'all' ? 'bg-indigo-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {totals.counts.all}
+                      </span>
                     </button>
+
                     <button 
                       onClick={() => setFilterType('paid')}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${filterType === 'paid' ? 'bg-emerald-500 text-white shadow-sm' : 'text-emerald-600 hover:bg-emerald-50'}`}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${filterType === 'paid' ? 'bg-emerald-500 text-white shadow-md shadow-emerald-100 scale-105' : 'text-emerald-600 hover:bg-emerald-50'}`}
                     >
-                      <div className={`w-1.5 h-1.5 rounded-full ${filterType === 'paid' ? 'bg-white' : 'bg-emerald-500'}`} />
-                      المسدد
+                      <CheckCircle size={14} />
+                      <span>المسدد</span>
+                      <span className={`px-1.5 py-0.5 rounded-lg text-[10px] ${filterType === 'paid' ? 'bg-emerald-400 text-white' : 'bg-emerald-100 text-emerald-600'}`}>
+                        {totals.counts.paid}
+                      </span>
                     </button>
+
                     <button 
                       onClick={() => setFilterType('modified')}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${filterType === 'modified' ? 'bg-indigo-600 text-white shadow-sm' : 'text-indigo-600 hover:bg-indigo-50'}`}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shrink-0 ${filterType === 'modified' ? 'bg-indigo-500 text-white shadow-md shadow-indigo-100 scale-105' : 'text-indigo-600 hover:bg-indigo-50'}`}
                     >
-                      <div className={`w-1.5 h-1.5 rounded-full ${filterType === 'modified' ? 'bg-white' : 'bg-indigo-600'}`} />
-                      المعدل
-                    </button>
-                    <button 
-                      onClick={() => setFilterType('normal')}
-                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${filterType === 'normal' ? 'bg-slate-200 text-slate-700 shadow-sm' : 'text-slate-500 hover:bg-slate-200'}`}
-                    >
-                      <div className={`w-1.5 h-1.5 rounded-full bg-slate-400`} />
-                      عادي
+                      <FileEdit size={14} />
+                      <span>المعدلة</span>
+                      <span className={`px-1.5 py-0.5 rounded-lg text-[10px] ${filterType === 'modified' ? 'bg-indigo-400 text-white' : 'bg-indigo-100 text-indigo-600'}`}>
+                        {totals.counts.modified}
+                      </span>
                     </button>
                   </div>
 
@@ -1656,14 +1698,18 @@ function headerLabel(header: string) {
 }
 
 function highlightText(text: string, highlight: string) {
-  if (!highlight.trim()) return text;
-  const parts = text.split(new RegExp(`(${highlight})`, 'gi'));
+  if (!highlight.trim()) return <span>{text}</span>;
+  
+  // Escape special characters for regex to avoid errors if user types things like ( or [
+  const escapedHighlight = highlight.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escapedHighlight})`, 'gi'));
+  
   return (
-    <span>
+    <span className="inline-block">
       {parts.map((part, i) => (
         <span
           key={i}
-          className={part.toLowerCase() === highlight.toLowerCase() ? 'bg-indigo-100 text-indigo-700 px-0.5 rounded' : ''}
+          className={part.toLowerCase() === highlight.toLowerCase() ? 'bg-amber-300 text-amber-950 px-0.5 rounded-sm font-bold shadow-sm' : ''}
         >
           {part}
         </span>
