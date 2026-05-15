@@ -116,12 +116,13 @@ type FilterType = 'all' | 'paid' | 'modified' | 'normal';
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [isFrozen, setIsFrozen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
-  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, role: 'admin' | 'visitor'}[]>([]);
+  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean}[]>([]);
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<'admin' | 'visitor'>('visitor');
   const [isAddingEmail, setIsAddingEmail] = useState(false);
@@ -406,7 +407,17 @@ export default function App() {
       const whitelistSnap = await getDoc(whitelistRef);
 
       if (whitelistSnap?.exists()) {
+        const whitelistData = whitelistSnap.data();
         console.log("Access granted: Email found in whitelist");
+        
+        if (whitelistData.isFrozen) {
+          console.log("User is frozen. Clearing local data and blocking access to upload.");
+          setIsFrozen(true);
+          clearLocalData(); // New helper to wipe data
+        } else {
+          setIsFrozen(false);
+        }
+        
         setIsAuthorized(true);
       } else {
         console.warn(`Authorization Result: REJECTED (Email ${email} not found in whitelist)`);
@@ -464,6 +475,16 @@ export default function App() {
     }
   };
 
+  const clearLocalData = () => {
+    setData([]);
+    setHeaders([]);
+    setFileName(null);
+    setPaidRows(new Set());
+    setModifiedRows(new Set());
+    setIsModified(false);
+    removeFromDB();
+  };
+
   // Whitelist Management Functions
   const fetchWhitelist = async () => {
     if (!isAdmin) return;
@@ -471,11 +492,28 @@ export default function App() {
     try {
       const { collection, getDocs } = await import('firebase/firestore');
       const querySnapshot = await getDocs(collection(db, path));
-      const list = querySnapshot.docs.map(doc => doc.data() as {email: string, addedAt: any, role: 'admin' | 'visitor'});
+      const list = querySnapshot.docs.map(doc => ({
+        ...doc.data(),
+        email: doc.id
+      })) as {email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean}[];
       setWhitelist(list);
     } catch (error) {
       console.error('Fetch Whitelist Error:', error);
       handleFirestoreError(error, OperationType.LIST, path);
+    }
+  };
+
+  const toggleFreezeStatus = async (targetEmail: string, currentStatus: boolean) => {
+    if (!isAdmin) return;
+    const path = `whitelist/${targetEmail.toLowerCase()}`;
+    try {
+      const { updateDoc } = await import('firebase/firestore');
+      await updateDoc(doc(db, 'whitelist', targetEmail.toLowerCase()), {
+        isFrozen: !currentStatus
+      });
+      await fetchWhitelist();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
     }
   };
 
@@ -490,7 +528,8 @@ export default function App() {
       await setDoc(docRef, {
         email,
         addedAt: serverTimestamp(),
-        role: 'visitor'
+        role: 'visitor',
+        isFrozen: false
       });
       console.log("Successfully added to whitelist in Firestore:", email);
       setNewEmail('');
@@ -1230,11 +1269,24 @@ export default function App() {
                             <Mail size={14} />
                           </div>
                           <div className="overflow-hidden">
-                            <p className="text-sm font-bold text-slate-700 truncate">{item.email}</p>
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-bold text-slate-700 truncate">{item.email}</p>
+                              {item.isFrozen && (
+                                <span className="bg-red-100 text-red-600 text-[9px] px-1.5 py-0.5 rounded-full font-black">مجمد</span>
+                              )}
+                            </div>
                             <p className="text-[10px] text-slate-400">مضاف منذ: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}</p>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
+                          <button 
+                            onClick={() => toggleFreezeStatus(item.email, !!item.isFrozen)}
+                            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all font-bold text-xs border shadow-sm ${item.isFrozen ? 'text-emerald-600 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' : 'text-orange-600 bg-orange-50 border-orange-100 hover:bg-orange-100'}`}
+                            title={item.isFrozen ? "إلغاء تجميد الحساب" : "تجميد الحساب مؤقتاً"}
+                          >
+                            {item.isFrozen ? <CheckCircle size={14} /> : <ShieldAlert size={14} />}
+                            <span>{item.isFrozen ? 'تفعيل' : 'تجميد'}</span>
+                          </button>
                           <button 
                             type="button"
                             onClick={(e) => {
@@ -1336,19 +1388,30 @@ export default function App() {
             </h2>
             <div 
               onClick={() => {
+                if (isFrozen) {
+                  alert('حسابك مجمد. يرجى التواصل مع مالك النظام لتفعيل الحساب.');
+                  return;
+                }
                 if (isAuthorized) {
                   fileInputRef.current?.click();
                 } else {
                   alert('ليس لديك صلاحية رفع الملفات');
                 }
               }}
-              className={`border-2 border-dashed border-indigo-100 rounded-2xl bg-indigo-50/30 p-8 flex flex-col items-center justify-center text-center group transition-all ${isAuthorized ? 'cursor-pointer hover:bg-indigo-50/50 hover:border-indigo-300' : 'opacity-50 grayscale cursor-not-allowed'}`}
+              className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center group transition-all ${isFrozen ? 'border-red-200 bg-red-50/30 grayscale opacity-70 cursor-not-allowed' : isAuthorized ? 'border-indigo-100 bg-indigo-50/30 cursor-pointer hover:bg-indigo-50/50 hover:border-indigo-300' : 'border-slate-100 bg-slate-50 opacity-50 grayscale cursor-not-allowed'}`}
             >
-              <div className="w-12 h-12 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                <FileSpreadsheet size={24} className="text-indigo-600" />
+              <div className={`w-12 h-12 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-3 group-hover:scale-110 transition-transform ${isFrozen ? 'text-red-500' : 'text-indigo-600'}`}>
+                {isFrozen ? <ShieldAlert size={24} /> : <FileSpreadsheet size={24} />}
               </div>
-              <p className="text-sm font-semibold text-slate-700">اضغط لرفع ملف Excel</p>
-              {!isAuthorized && <p className="text-[10px] text-red-500 font-bold mt-2">غير مصرح لك بالرفع</p>}
+              <p className="text-sm font-semibold text-slate-700">
+                {isFrozen ? 'الحساب مجمد' : 'اضغط لرفع ملف Excel'}
+              </p>
+              {isFrozen && (
+                <p className="text-[10px] text-red-600 font-black mt-2 leading-relaxed px-4">
+                  عذراً، لا يمكنك رفع ملفات لأن حسابك مجمد. <br/> يرجى التواصل مع المالك.
+                </p>
+              )}
+              {!isFrozen && !isAuthorized && <p className="text-[10px] text-red-500 font-bold mt-2">غير مصرح لك بالرفع</p>}
               <p className="text-xs text-slate-400 mt-1">يدعم XLSX, XLS, CSV</p>
             </div>
             <input
@@ -1356,7 +1419,7 @@ export default function App() {
               type="file"
               className="hidden"
               accept=".xlsx, .xls, .csv"
-              disabled={!isAuthorized}
+              disabled={!isAuthorized || isFrozen}
               onChange={handleFileUpload}
             />
             
