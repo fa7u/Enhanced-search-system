@@ -17,6 +17,9 @@ import {
   MapPin, 
   SearchSlash, 
   Clock, 
+  Calendar,
+  ShieldCheck,
+  Infinity,
   BarChart3, 
   ChevronRight,
   Database,
@@ -42,7 +45,19 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, User as FirebaseUser, browserPopupRedirectResolver } from 'firebase/auth';
-import { getFirestore, doc, getDocFromServer, getDoc } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  doc, 
+  getDocFromServer, 
+  getDoc, 
+  onSnapshot, 
+  collection, 
+  getDocs, 
+  updateDoc, 
+  setDoc, 
+  deleteDoc, 
+  serverTimestamp 
+} from 'firebase/firestore';
 import firebaseConfig from '@/firebase-applet-config.json';
 
 // Initialize Firebase
@@ -123,9 +138,11 @@ export default function App() {
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
-  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[]>([]);
+  const [frozenReason, setFrozenReason] = useState<'manual' | 'expired' | null>(null);
+  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, subscriptionExpiry: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[]>([]);
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
+  const [newSubscriptionPeriod, setNewSubscriptionPeriod] = useState<'1m' | '6m' | '1y' | 'lifetime'>('1m');
   const [newRole, setNewRole] = useState<'admin' | 'visitor'>('visitor');
   const [isAddingEmail, setIsAddingEmail] = useState(false);
   const [emailToDelete, setEmailToDelete] = useState<string | null>(null);
@@ -372,6 +389,44 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
+  // Add Real-time listener for current user's status
+  useEffect(() => {
+    if (!user?.email) return;
+    
+    const email = user.email.toLowerCase();
+    
+    // Skip real-time listener for owners
+    if (email === 'langmix2@gmail.com' || email === 'lnagmix2@gmail.com' || user.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+      return;
+    }
+
+    const docRef = doc(db, 'whitelist', email);
+    
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const expiry = data.subscriptionExpiry;
+        const now = new Date();
+        const hasExpired = expiry && expiry.toDate() < now;
+
+        if (data.isFrozen || hasExpired) {
+          setIsFrozen(true);
+          setFrozenReason(hasExpired ? 'expired' : 'manual');
+          clearLocalData();
+        } else {
+          setIsFrozen(false);
+          setFrozenReason(null);
+        }
+        setIsAuthorized(true);
+      } else {
+        // Doc removed
+        setIsAuthorized(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
     setIsAdmin(false); 
@@ -400,6 +455,7 @@ export default function App() {
         console.log("Owner admin detected");
         setIsAdmin(true);
         setIsAuthorized(true);
+        setIsFrozen(false); // Owner is never frozen
         setIsCheckingAuth(false);
         return;
       }
@@ -412,12 +468,18 @@ export default function App() {
         const whitelistData = whitelistSnap.data();
         console.log("Access granted: Email found in whitelist");
         
-        if (whitelistData.isFrozen) {
-          console.log("User is frozen. Clearing local data and blocking access to upload.");
+        const expiry = whitelistData.subscriptionExpiry;
+        const now = new Date();
+        const hasExpired = expiry && expiry.toDate() < now;
+
+        if (whitelistData.isFrozen || hasExpired) {
+          console.log("User is frozen or expired. Clearing local data and blocking access to upload.");
           setIsFrozen(true);
-          clearLocalData(); // New helper to wipe data
+          setFrozenReason(hasExpired ? 'expired' : 'manual');
+          clearLocalData(); 
         } else {
           setIsFrozen(false);
+          setFrozenReason(null);
         }
         
         setIsAuthorized(true);
@@ -492,12 +554,11 @@ export default function App() {
     if (!isAdmin) return;
     const path = 'whitelist';
     try {
-      const { collection, getDocs } = await import('firebase/firestore');
       const querySnapshot = await getDocs(collection(db, path));
       const list = querySnapshot.docs.map(doc => ({
         ...doc.data(),
         email: doc.id
-      })) as {email: string, addedAt: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[];
+      })) as {email: string, addedAt: any, subscriptionExpiry: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[];
       setWhitelist(list);
     } catch (error) {
       console.error('Fetch Whitelist Error:', error);
@@ -509,7 +570,6 @@ export default function App() {
     if (!isAdmin) return;
     const path = `whitelist/${targetEmail.toLowerCase()}`;
     try {
-      const { updateDoc } = await import('firebase/firestore');
       await updateDoc(doc(db, 'whitelist', targetEmail.toLowerCase()), {
         isFrozen: !currentStatus
       });
@@ -525,24 +585,73 @@ export default function App() {
     const email = newEmail.trim().toLowerCase();
     const path = `whitelist/${email}`;
     try {
-      const { setDoc, serverTimestamp } = await import('firebase/firestore');
+      // Calculate expiry date
+      let expiryDate: Date | null = new Date();
+      if (newSubscriptionPeriod === '1m') expiryDate.setDate(expiryDate.getDate() + 30);
+      else if (newSubscriptionPeriod === '6m') expiryDate.setDate(expiryDate.getDate() + 180);
+      else if (newSubscriptionPeriod === '1y') expiryDate.setDate(expiryDate.getDate() + 365);
+      else if (newSubscriptionPeriod === 'lifetime') expiryDate = null;
+
       const docRef = doc(db, 'whitelist', email);
       await setDoc(docRef, {
         email,
         name: newName.trim(),
         addedAt: serverTimestamp(),
+        subscriptionExpiry: expiryDate,
         role: 'visitor',
         isFrozen: false
       });
       console.log("Successfully added to whitelist in Firestore:", email);
       setNewEmail('');
       setNewName('');
+      setNewSubscriptionPeriod('1m');
       await fetchWhitelist();
       alert(`تمت إضافة ${email} بنجاح إلى قاعدة البيانات`);
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     } finally {
       setIsAddingEmail(false);
+    }
+  };
+
+  const updateSubscription = async (targetEmail: string, period: '1m' | '6m' | '1y' | 'lifetime') => {
+    if (!isAdmin) return;
+    const path = `whitelist/${targetEmail.toLowerCase()}`;
+    try {
+      const docRef = doc(db, 'whitelist', targetEmail.toLowerCase());
+      const docSnap = await getDoc(docRef);
+      
+      if (!docSnap.exists()) return;
+      
+      const currentData = docSnap.data();
+      let currentExpiry = currentData.subscriptionExpiry?.toDate() || new Date();
+      
+      // If subscription already expired, start from today
+      if (currentExpiry < new Date()) {
+        currentExpiry = new Date();
+      }
+
+      let newExpiry: Date | null = new Date(currentExpiry);
+
+      if (period === '1m') {
+        newExpiry.setDate(newExpiry.getDate() + 30);
+      } else if (period === '6m') {
+        newExpiry.setDate(newExpiry.getDate() + 180);
+      } else if (period === '1y') {
+        newExpiry.setDate(newExpiry.getDate() + 365);
+      } else if (period === 'lifetime') {
+        newExpiry = null;
+      }
+
+      await updateDoc(docRef, {
+        subscriptionExpiry: newExpiry,
+        isFrozen: false 
+      });
+      
+      await fetchWhitelist();
+      alert('تم تحديث مدة الاشتراك بنجاح');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
     }
   };
 
@@ -557,7 +666,6 @@ export default function App() {
     
     setIsDeleting(true);
     try {
-      const { deleteDoc } = await import('firebase/firestore');
       await deleteDoc(doc(db, 'whitelist', lowerEmail));
       
       // Update local state immediately
@@ -800,6 +908,9 @@ export default function App() {
 
   const exportToExcel = (forceAll = false) => {
     if (!isAuthorized) return;
+    // Deciding formatting locale (ar-EG for Gregorian)
+    const locale = 'ar-EG';
+    
     // 1. Decide which data set to export
     const hasActiveFilter = searchQuery.trim() !== '' || filterType !== 'all';
     const isExportAll = forceAll || !hasActiveFilter;
@@ -933,24 +1044,24 @@ export default function App() {
     const settledLabel = isExportAll ? "المسدد الإجمالي" : "المسدد للنتائج الحالية";
 
     headers.forEach((h) => {
-      if (h === totals.amountCol) {
-        summaryRowData[h] = `إجمالي المبلغ: ${exportAmount.toLocaleString('ar-SA')} ر.س`;
+      if (amountCol) {
+        summaryRowData[h] = `إجمالي المبلغ: ${exportAmount.toLocaleString(locale)} ر.س`;
       } else if (h === totals.remainingCol) {
-        summaryRowData[h] = `إجمالي المتبقي: ${exportRemaining.toLocaleString('ar-SA')} ر.س`;
+        summaryRowData[h] = `إجمالي المتبقي: ${exportRemaining.toLocaleString(locale)} ر.س`;
         // If we can't use next column, append it here
         if (!nextColHeader) {
-          if (exportSettled > 0) summaryRowData[h] += ` | ${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
-          if (exportLiquidation > 0) summaryRowData[h] += ` | إجمالي التصفية: ${exportLiquidation.toLocaleString('ar-SA')} ر.س`;
+          if (exportSettled > 0) summaryRowData[h] += ` | ${settledLabel}: ${exportSettled.toLocaleString(locale)} ر.س`;
+          if (exportLiquidation > 0) summaryRowData[h] += ` | إجمالي التصفية: ${exportLiquidation.toLocaleString(locale)} ر.س`;
         }
       } else if (nextColHeader && h === nextColHeader) {
         if (exportSettled > 0) {
-          summaryRowData[h] = `${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
+          summaryRowData[h] = `${settledLabel}: ${exportSettled.toLocaleString(locale)} ر.س`;
           if (!nextColHeader2 && exportLiquidation > 0) {
-            summaryRowData[h] += ` | إجمالي التصفية: ${exportLiquidation.toLocaleString('ar-SA')} ر.س`;
+            summaryRowData[h] += ` | إجمالي التصفية: ${exportLiquidation.toLocaleString(locale)} ر.س`;
           }
         }
       } else if (nextColHeader2 && h === nextColHeader2 && exportLiquidation > 0) {
-        summaryRowData[h] = `إجمالي التصفية: ${exportLiquidation.toLocaleString('ar-SA')} ر.س`;
+        summaryRowData[h] = `إجمالي التصفية: ${exportLiquidation.toLocaleString(locale)} ر.س`;
       } else if (h === headers[0]) {
         summaryRowData[h] = '--- الملخص الإجمالي ---';
       } else {
@@ -1152,10 +1263,14 @@ export default function App() {
         <div className="bg-red-600 text-white px-4 py-3 text-center flex items-center justify-center gap-4 animate-in slide-in-from-top duration-500 sticky top-0 z-[60]">
           <div className="flex items-center gap-2 font-black text-sm">
             <ShieldAlert size={20} className="animate-pulse" />
-            <span>تنبيه: حسابك مجمد حالياً!</span>
+            <span>{frozenReason === 'expired' ? 'تنبيه: انتهى اشتراكك!' : 'تنبيه: حسابك مجمد حالياً!'}</span>
           </div>
           <div className="h-4 w-[1px] bg-white/30 hidden sm:block"></div>
-          <p className="text-xs font-bold hidden sm:block">يرجى التواصل مع المالك لتفعيل الحساب واستعادة كامل الصلاحيات</p>
+          <p className="text-xs font-bold hidden sm:block">
+            {frozenReason === 'expired' 
+              ? 'يرجى تجديد الاشتراك لاستعادة كامل الصلاحيات والوصول لملفاتك' 
+              : 'يرجى التواصل مع المالك لتفعيل الحساب واستعادة كامل الصلاحيات'}
+          </p>
           <div className="flex items-center gap-4 mr-auto sm:mr-0">
             <a href="mailto:fahussein79@gmail.com" className="flex items-center gap-1.5 bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded-lg transition-all text-[10px] font-black border border-white/10 uppercase tracking-tighter">
               <Mail size={12} />
@@ -1295,15 +1410,30 @@ export default function App() {
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
                 <p className="text-xs font-bold text-slate-500 mb-3">إضافة مستخدم جديد:</p>
                 <div className="flex flex-col gap-3">
-                  <div className="relative">
-                    <input 
-                      type="text" 
-                      placeholder="اسم صاحب الحساب"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
-                    <User size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="relative">
+                      <input 
+                        type="text" 
+                        placeholder="اسم صاحب الحساب"
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      <User size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
+                    </div>
+                    <div className="relative">
+                      <select
+                        value={newSubscriptionPeriod}
+                        onChange={(e) => setNewSubscriptionPeriod(e.target.value as any)}
+                        className="w-full h-11 px-4 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none appearance-none"
+                      >
+                        <option value="1m">شهر واحد</option>
+                        <option value="6m">6 أشهر</option>
+                        <option value="1y">سنة كاملة</option>
+                        <option value="lifetime">مدى الحياة</option>
+                      </select>
+                      <Calendar size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                    </div>
                   </div>
                   <div className="flex gap-2">
                     <div className="flex-1 relative">
@@ -1351,38 +1481,58 @@ export default function App() {
                               )}
                             </div>
                             <p className="text-[10px] text-slate-500 font-bold truncate break-all">{item.email}</p>
-                            <p className="text-[10px] text-slate-400 font-bold mt-1">
-                              مضاف منذ {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}
-                            </p>
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+                              <p className="text-[10px] text-slate-400 font-bold">
+                                مضاف: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-EG') : 'غير معروف'}
+                              </p>
+                              {item.subscriptionExpiry ? (
+                                <p className={`text-[10px] font-black ${new Date(item.subscriptionExpiry.seconds * 1000) < new Date() ? 'text-red-500' : 'text-emerald-600'}`}>
+                                  {new Date(item.subscriptionExpiry.seconds * 1000) < new Date() ? 'منتهي: ' : 'ينتهي: '}
+                                  {new Date(item.subscriptionExpiry.seconds * 1000).toLocaleDateString('ar-EG')}
+                                </p>
+                              ) : (
+                                <p className="text-[10px] text-indigo-600 font-black">
+                                  اشتراك مدى الحياة
+                                </p>
+                              )}
+                            </div>
                           </div>
                         </div>
 
                         {/* Bottom: Actions */}
-                        <div className="flex items-center gap-2 pt-3 border-t border-slate-50">
-                          <button 
-                            onClick={() => toggleFreezeStatus(item.email, !!item.isFrozen)}
-                            className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl transition-all font-black text-[11px] border shadow-sm active:scale-95 ${
-                              item.isFrozen 
-                                ? 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' 
-                                : 'text-orange-700 bg-orange-50 border-orange-100 hover:bg-orange-100'
-                            }`}
-                          >
-                            {item.isFrozen ? <CheckCircle size={14} /> : <ShieldAlert size={14} />}
-                            <span>{item.isFrozen ? 'تفعيل الحساب' : 'تجميد الحساب'}</span>
-                          </button>
-                          
-                          <button 
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setEmailToDelete(item.email);
-                            }}
-                            className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-red-700 bg-red-50 border border-red-100 hover:bg-red-100 active:scale-95 transition-all font-black text-[11px] shadow-sm"
-                          >
-                            <Trash2 size={14} />
-                            <span>حذف</span>
-                          </button>
+                        <div className="space-y-2 pt-3 border-t border-slate-50">
+                          <div className="flex items-center gap-1">
+                            <span className="text-[9px] font-bold text-slate-400 ml-1">تجديد:</span>
+                            <button onClick={() => updateSubscription(item.email, '1m')} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-black hover:bg-indigo-100 transition-all border border-indigo-100">شهر</button>
+                            <button onClick={() => updateSubscription(item.email, '6m')} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-black hover:bg-indigo-100 transition-all border border-indigo-100">6 أشهر</button>
+                            <button onClick={() => updateSubscription(item.email, '1y')} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-black hover:bg-indigo-100 transition-all border border-indigo-100">سنة</button>
+                            <button onClick={() => updateSubscription(item.email, 'lifetime')} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-lg text-[9px] font-black hover:bg-slate-200 transition-all border border-slate-200">دائم</button>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button 
+                              onClick={() => toggleFreezeStatus(item.email, !!item.isFrozen)}
+                              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl transition-all font-black text-[10px] border shadow-sm active:scale-95 ${
+                                item.isFrozen 
+                                  ? 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' 
+                                  : 'text-orange-700 bg-orange-50 border-orange-100 hover:bg-orange-100'
+                              }`}
+                            >
+                              {item.isFrozen ? <CheckCircle size={12} /> : <ShieldAlert size={12} />}
+                              <span>{item.isFrozen ? 'تفعيل يدوي' : 'تجميد يدوي'}</span>
+                            </button>
+                            
+                            <button 
+                              type="button"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setEmailToDelete(item.email);
+                              }}
+                              className="px-3 flex items-center justify-center gap-2 py-2 rounded-xl text-red-700 bg-red-50 border border-red-100 hover:bg-red-100 active:scale-95 transition-all font-black text-[10px] shadow-sm"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -1472,7 +1622,10 @@ export default function App() {
             <div 
               onClick={() => {
                 if (isFrozen) {
-                  alert('عذراً، حسابك مجمد. يرجى التواصل مع مالك النظام لتفعيل الحساب.\n\nالإيميل: fahussein79@gmail.com\nواتساب: 0550665495');
+                  const msg = frozenReason === 'expired' 
+                    ? 'عذراً، انتهى اشتراكك. يرجى التواصل مع مالك النظام لتجديد الاشتراك.' 
+                    : 'عذراً، حسابك مجمد. يرجى التواصل مع مالك النظام لتفعيل الحساب.';
+                  alert(`${msg}\n\nالإيميل: fahussein79@gmail.com\nواتساب: 0550665495`);
                   return;
                 }
                 if (isAuthorized) {
@@ -1492,7 +1645,9 @@ export default function App() {
               {isFrozen && (
                 <div className="mt-3 px-4">
                   <p className="text-[10px] text-red-600 font-black leading-relaxed mb-2">
-                    عذراً، لا يمكنك رفع ملفات لأن حسابك مجمد.
+                    {frozenReason === 'expired' 
+                      ? 'لا يمكنك رفع ملفات لأن اشتراكك منتهي.' 
+                      : 'لا يمكنك رفع ملفات لأن حسابك مجمد.'}
                   </p>
                   <div className="flex flex-col items-center gap-1 opacity-80">
                     <p className="text-[10px] font-bold text-slate-500 font-mono">fahussein79@gmail.com</p>
@@ -1565,7 +1720,7 @@ export default function App() {
                   </div>
                   <div className="flex items-baseline justify-end gap-2">
                     <p className="text-3xl font-black text-slate-800 leading-none tracking-tight">
-                      {totals.totalAmount.toLocaleString('ar-SA')}
+                      {totals.totalAmount.toLocaleString('ar-EG')}
                     </p>
                     <span className="text-xs font-bold text-slate-400">ر.س</span>
                   </div>
@@ -1592,7 +1747,7 @@ export default function App() {
                     </div>
                     <div className="flex items-baseline gap-1">
                       <p className="text-xl font-black text-orange-900 tracking-tight">
-                        {totals.totalRemaining.toLocaleString('ar-SA')}
+                        {totals.totalRemaining.toLocaleString('ar-EG')}
                       </p>
                       <span className="text-[10px] font-bold text-orange-400 leading-none">ر.س</span>
                     </div>
@@ -1613,7 +1768,7 @@ export default function App() {
                     </div>
                     <div className="flex items-baseline gap-1">
                       <p className="text-xl font-black text-emerald-900 tracking-tight">
-                        {totals.totalSettledFiltered.toLocaleString('ar-SA')}
+                        {totals.totalSettledFiltered.toLocaleString('ar-EG')}
                       </p>
                       <span className="text-[10px] font-bold text-emerald-400 leading-none">ر.س</span>
                     </div>
@@ -1635,7 +1790,7 @@ export default function App() {
                       </div>
                       <div className="flex items-baseline gap-1">
                         <p className="text-xl font-black text-red-900 tracking-tight">
-                          {totals.totalLiquidation.toLocaleString('ar-SA')}
+                          {totals.totalLiquidation.toLocaleString('ar-EG')}
                         </p>
                         <span className="text-[10px] font-bold text-red-400 leading-none">ر.س</span>
                       </div>
@@ -2023,22 +2178,22 @@ export default function App() {
                                 {isAmount ? (
                                   <div className="flex items-center gap-2 whitespace-nowrap">
                                     <span className="text-[10px] text-slate-400 font-normal">إجمالي المبلغ:</span>
-                                    <span>{totals.totalAmount.toLocaleString('ar-SA')} ر.س</span>
+                                    <span>{totals.totalAmount.toLocaleString('ar-EG')} ر.س</span>
                                   </div>
                                 ) : isRemaining ? (
                                   <div className="flex items-center gap-4 whitespace-nowrap">
                                     <div className="flex items-center gap-2">
                                       <span className="text-[10px] text-slate-400 font-normal">المتبقي:</span>
-                                      <span>{totals.totalRemaining.toLocaleString('ar-SA')} ر.س</span>
+                                      <span>{totals.totalRemaining.toLocaleString('ar-EG')} ر.س</span>
                                     </div>
                                     <div className="flex items-center gap-2 bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded-lg border border-emerald-100">
                                       <span className="text-[10px] opacity-70">المسدد حالياً:</span>
-                                      <span className="font-bold">{totals.totalSettledFiltered.toLocaleString('ar-SA')} ر.س</span>
+                                      <span className="font-bold">{totals.totalSettledFiltered.toLocaleString('ar-EG')} ر.س</span>
                                     </div>
                                     {totals.totalLiquidation > 0 && (
                                       <div className="flex items-center gap-2 bg-red-50 text-red-600 px-2 py-0.5 rounded-lg border border-red-100">
                                         <span className="text-[10px] opacity-70">إجمالي التصفية:</span>
-                                        <span className="font-bold">{totals.totalLiquidation.toLocaleString('ar-SA')} ر.س</span>
+                                        <span className="font-bold">{totals.totalLiquidation.toLocaleString('ar-EG')} ر.س</span>
                                       </div>
                                     )}
                                   </div>
@@ -2076,7 +2231,7 @@ export default function App() {
             <span>نظام البحث: متصل</span>
           </div>
           <span className="w-1 h-1 bg-slate-600 rounded-full hidden sm:block"></span>
-          <span className="hidden sm:block">آخر تحديث: {new Date().toLocaleTimeString('ar-SA')}</span>
+          <span className="hidden sm:block">آخر تحديث: {new Date().toLocaleTimeString('ar-EG')}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-indigo-400 font-bold">SMART ENGINE V1.0</span>
