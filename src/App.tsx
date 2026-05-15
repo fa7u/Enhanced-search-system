@@ -27,6 +27,10 @@ import {
   FileEdit,
   LayoutGrid,
   Circle,
+  Wallet,
+  Coins,
+  History,
+  TrendingDown,
   Lock,
   LogOut,
   ShieldAlert,
@@ -121,6 +125,8 @@ export default function App() {
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<'admin' | 'visitor'>('visitor');
   const [isAddingEmail, setIsAddingEmail] = useState(false);
+  const [emailToDelete, setEmailToDelete] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   
   const [data, setData] = useState<DataRow[]>([]);
   const [originalData, setOriginalData] = useState<DataRow[]>([]);
@@ -132,6 +138,7 @@ export default function App() {
   const [paidRows, setPaidRows] = useState<Set<number>>(new Set());
   const [modifiedRows, setModifiedRows] = useState<Set<number>>(new Set());
   const [editingCell, setEditingCell] = useState<{ row: number; col: string } | null>(null);
+  const [editingValue, setEditingValue] = useState<string>('');
   const [isModified, setIsModified] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -149,27 +156,28 @@ export default function App() {
     return results;
   }, [data, searchQuery]);
 
-  const filteredData = useMemo(() => {
+  const filteredItems = useMemo(() => {
     if (filterType === 'all') {
-      return searchResults.map(item => item.row);
+      return searchResults;
     }
 
-    return searchResults
-      .filter(({ index }) => {
-        const isPaid = paidRows.has(index);
-        const isModified = modifiedRows.has(index);
-        
-        if (filterType === 'paid') return isPaid;
-        if (filterType === 'modified') return isModified;
-        return true;
-      })
-      .map(item => item.row);
+    return searchResults.filter(({ index }) => {
+      const isPaid = paidRows.has(index);
+      const isModified = modifiedRows.has(index);
+      
+      if (filterType === 'paid') return isPaid;
+      if (filterType === 'modified') return isModified;
+      return true;
+    });
   }, [searchResults, filterType, paidRows, modifiedRows]);
+
+  const filteredData = useMemo(() => filteredItems.map(item => item.row), [filteredItems]);
 
   // Financial Summary Calculation
   const totals = useMemo(() => {
     const isSearching = searchQuery.trim() !== '' || filterType !== 'all';
-    const currentData = isSearching ? filteredData : data;
+    // Use indexed items to avoid repeated findIndex calls
+    const currentItems = isSearching ? filteredItems : data.map((row, index) => ({ row, index }));
     
     // Attempt to find columns for Amount and Remaining
     const amountKeywords = ['مبلغ', 'المبلغ', 'قيمة', 'القيمة', 'amount', 'total', 'price', 'السعر'];
@@ -182,10 +190,15 @@ export default function App() {
     let totalRemaining = 0;
     let totalSettledFiltered = 0;
     let totalSettledGlobal = 0;
+    let totalLiquidation = 0;
 
-    currentData.forEach(row => {
-      const originalIdx = data.findIndex(r => r === row);
-      const isPaid = paidRows.has(originalIdx);
+    currentItems.forEach(({ row, index }) => {
+      const isPaid = paidRows.has(index);
+      
+      // Check for liquidation keyword "تصفية" in all columns of this row
+      const isLiquidation = Object.values(row).some(val => 
+        String(val).toLowerCase().includes('تصفية')
+      );
 
       if (amountCol) {
         const val = parseFloat(String(row[amountCol]).replace(/[^0-9.-]+/g, ''));
@@ -193,11 +206,18 @@ export default function App() {
       }
       if (remainingCol) {
         const val = parseFloat(String(row[remainingCol]).replace(/[^0-9.-]+/g, ''));
-        if (!isNaN(val)) totalRemaining += val;
-        
-        // Only add to summary if this row is paid AND matches search results
-        if (isPaid && !isNaN(val)) {
-          totalSettledFiltered += val;
+        if (!isNaN(val)) {
+          totalRemaining += val;
+          
+          // Only add to summary if this row is paid
+          if (isPaid) {
+            totalSettledFiltered += val;
+          }
+          
+          // Add to liquidation total if keyword found
+          if (isLiquidation) {
+            totalLiquidation += val;
+          }
         }
       }
     });
@@ -223,11 +243,12 @@ export default function App() {
       totalRemaining, 
       totalSettledGlobal, 
       totalSettledFiltered, 
+      totalLiquidation,
       amountCol, 
       remainingCol,
       counts
     };
-  }, [data, searchResults, filteredData, headers, searchQuery, filterType, paidRows, modifiedRows]);
+  }, [data, searchResults, filteredItems, headers, searchQuery, filterType, paidRows, modifiedRows]);
 
   // Initialize IndexedDB and load saved data
   useEffect(() => {
@@ -483,15 +504,29 @@ export default function App() {
   };
 
   const removeFromWhitelist = async (email: string) => {
-    if (!isAdmin) return;
-    if (!window.confirm(`هل أنت متأكد من إزالة ${email} من القائمة؟`)) return;
-    const path = `whitelist/${email.toLowerCase()}`;
+    if (!isAdmin) {
+      alert("ليس لديك صلاحية للقيام بهذا الإجراء");
+      return;
+    }
+
+    const lowerEmail = email.trim().toLowerCase();
+    const path = `whitelist/${lowerEmail}`;
+    
+    setIsDeleting(true);
     try {
       const { deleteDoc } = await import('firebase/firestore');
-      await deleteDoc(doc(db, 'whitelist', email.toLowerCase()));
+      await deleteDoc(doc(db, 'whitelist', lowerEmail));
+      
+      // Update local state immediately
+      setWhitelist(prev => prev.filter(item => item.email.toLowerCase() !== lowerEmail));
+      setEmailToDelete(null);
+      
+      // Sync from server
       await fetchWhitelist();
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -600,27 +635,36 @@ export default function App() {
 
   const updateNote = (originalIdx: number, header: string, newValue: string) => {
     if (!isAuthorized) return;
-    // 1. Update local state for immediate feedback
-    const nextData = [...data];
-    nextData[originalIdx] = { ...nextData[originalIdx], [header]: newValue };
-    setData(nextData);
     
-    // 2. Track modification
-    const newModifiedRows = new Set(modifiedRows);
-    newModifiedRows.add(originalIdx);
-    setModifiedRows(newModifiedRows);
+    // Use functional updates to ensure we have the latest state
+    setData(prevData => {
+      const nextData = [...prevData];
+      nextData[originalIdx] = { ...nextData[originalIdx], [header]: newValue };
+      
+      // Track modification
+      setModifiedRows(prevModified => {
+        const nextModified = new Set(prevModified);
+        nextModified.add(originalIdx);
+        
+        // Persist to DB after both states are updated
+        // Note: we use values derived from the closure of the functional update to be safe
+        saveToDB(
+          nextData, 
+          headers, 
+          fileName || '', 
+          Array.from(paidRows) as number[], 
+          Array.from(nextModified) as number[], 
+          true, 
+          originalData
+        );
+        
+        return nextModified;
+      });
+      
+      return nextData;
+    });
+    
     setIsModified(true);
-
-    // 3. Persist to DB
-    saveToDB(
-      nextData, 
-      headers, 
-      fileName || '', 
-      Array.from(paidRows) as number[], 
-      Array.from(newModifiedRows) as number[], 
-      true, 
-      originalData
-    );
   };
 
   const undoRowChanges = (originalIdx: number) => {
@@ -714,21 +758,27 @@ export default function App() {
   const exportToExcel = (forceAll = false) => {
     if (!isAuthorized) return;
     // 1. Decide which data set to export
-    // Force all means entire file. Otherwise, we check if there is an active filter or search.
     const hasActiveFilter = searchQuery.trim() !== '' || filterType !== 'all';
     const isExportAll = forceAll || !hasActiveFilter;
-    const dataToExport = isExportAll ? data : filteredData;
     
-    if (dataToExport.length === 0) return;
+    // Use indexed items for efficiency and correctness
+    const itemsToExport = isExportAll 
+      ? data.map((row, index) => ({ row, index })) 
+      : filteredItems;
+    
+    if (itemsToExport.length === 0) return;
+
+    const dataToExport = itemsToExport.map(i => i.row);
 
     // 1.1 Calculate specific totals for the exported data
     let exportAmount = 0;
     let exportRemaining = 0;
     let exportSettled = 0;
+    let exportLiquidation = 0;
 
-    dataToExport.forEach(row => {
-      const originalIdx = data.findIndex(r => r === row);
-      const isPaid = paidRows.has(originalIdx);
+    itemsToExport.forEach(({ row, index }) => {
+      const isPaid = paidRows.has(index);
+      const isLiquidation = Object.values(row).some(v => String(v).includes('تصفية'));
 
       if (totals.amountCol) {
         const val = parseFloat(String(row[totals.amountCol]).replace(/[^0-9.-]+/g, ''));
@@ -741,6 +791,10 @@ export default function App() {
           // Only add to summary if this row is marked as settled/paid
           if (isPaid) {
             exportSettled += val;
+          }
+          // Liquidation total
+          if (isLiquidation) {
+            exportLiquidation += val;
           }
         }
       }
@@ -795,8 +849,7 @@ export default function App() {
 
     // 5. Apply Styles to Data Rows
     for (let R = range.s.r + 1; R <= range.e.r; ++R) {
-      const rowData = dataToExport[R - 1];
-      const originalIdx = data.findIndex(r => r === rowData);
+      const { row: rowData, index: originalIdx } = itemsToExport[R - 1];
       const isPaid = paidRows.has(originalIdx);
       const isModifiedRow = modifiedRows.has(originalIdx);
       
@@ -829,6 +882,10 @@ export default function App() {
     const settledColIndex = headers.indexOf(totals.remainingCol || '') + 1;
     const hasNextCol = settledColIndex < headers.length;
     const nextColHeader = hasNextCol ? headers[settledColIndex] : null;
+    
+    const liquidationColIndex = settledColIndex + 1;
+    const hasNextCol2 = liquidationColIndex < headers.length;
+    const nextColHeader2 = hasNextCol2 ? headers[liquidationColIndex] : null;
 
     const settledLabel = isExportAll ? "المسدد الإجمالي" : "المسدد للنتائج الحالية";
 
@@ -838,12 +895,19 @@ export default function App() {
       } else if (h === totals.remainingCol) {
         summaryRowData[h] = `إجمالي المتبقي: ${exportRemaining.toLocaleString('ar-SA')} ر.س`;
         // If we can't use next column, append it here
-        if (!nextColHeader && exportSettled > 0) {
-          summaryRowData[h] += ` | ${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
+        if (!nextColHeader) {
+          if (exportSettled > 0) summaryRowData[h] += ` | ${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
+          if (exportLiquidation > 0) summaryRowData[h] += ` | إجمالي التصفية: ${exportLiquidation.toLocaleString('ar-SA')} ر.س`;
         }
-      } else if (nextColHeader && h === nextColHeader && exportSettled > 0) {
-        // If the column after 'remaining' is available, use it for settled amount to avoid overlap
-        summaryRowData[h] = `${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
+      } else if (nextColHeader && h === nextColHeader) {
+        if (exportSettled > 0) {
+          summaryRowData[h] = `${settledLabel}: ${exportSettled.toLocaleString('ar-SA')} ر.س`;
+          if (!nextColHeader2 && exportLiquidation > 0) {
+            summaryRowData[h] += ` | إجمالي التصفية: ${exportLiquidation.toLocaleString('ar-SA')} ر.س`;
+          }
+        }
+      } else if (nextColHeader2 && h === nextColHeader2 && exportLiquidation > 0) {
+        summaryRowData[h] = `إجمالي التصفية: ${exportLiquidation.toLocaleString('ar-SA')} ر.س`;
       } else if (h === headers[0]) {
         summaryRowData[h] = '--- الملخص الإجمالي ---';
       } else {
@@ -868,6 +932,8 @@ export default function App() {
           worksheet[address].s = highlightStyle("EA580C"); 
         } else if (nextColHeader && header === nextColHeader && exportSettled > 0) {
           worksheet[address].s = highlightStyle("10B981"); // Emerald 500 for settled
+        } else if (nextColHeader2 && header === nextColHeader2 && exportLiquidation > 0) {
+          worksheet[address].s = highlightStyle("EF4444"); // Red 500 for liquidation
         } else {
           worksheet[address].s = summaryStyle;
         }
@@ -1120,13 +1186,6 @@ export default function App() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <button 
-                    onClick={() => user?.email && checkAuthorization(user.email)}
-                    className="p-2 hover:bg-slate-100 rounded-xl text-slate-400"
-                    title="تحديث الصلاحيات"
-                  >
-                    <RefreshCw size={18} className={isCheckingAuth ? 'animate-spin' : ''} />
-                  </button>
                   <button onClick={() => setShowAdminPanel(false)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400">
                     <X size={20} />
                   </button>
@@ -1175,14 +1234,21 @@ export default function App() {
                             <p className="text-[10px] text-slate-400">مضاف منذ: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-SA') : 'غير معروف'}</p>
                           </div>
                         </div>
-                        <button 
-                          onClick={() => removeFromWhitelist(item.email)}
-                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all font-bold text-[10px]"
-                          title="إزالة هذا الحساب"
-                        >
-                          <Trash2 size={12} />
-                          <span>حذف</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button 
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setEmailToDelete(item.email);
+                            }}
+                            className="flex items-center gap-2 px-4 py-2 rounded-xl text-red-600 bg-red-50 hover:bg-red-100 active:scale-95 transition-all font-black text-xs border border-red-200 shadow-sm z-50 cursor-pointer"
+                            title="حذف هذا الحساب نهائياً"
+                          >
+                            <Trash2 size={16} />
+                            <span>حذف</span>
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))
@@ -1194,6 +1260,68 @@ export default function App() {
               </div>
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Confirmation Modal */}
+      <AnimatePresence>
+        {emailToDelete && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+            onClick={() => !isDeleting && setEmailToDelete(null)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white rounded-[2rem] p-8 max-w-sm w-full shadow-2xl border border-slate-100 text-center relative overflow-hidden"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Decorative Background */}
+              <div className="absolute top-0 left-0 w-full h-2 bg-red-500"></div>
+              
+              <div className="w-20 h-20 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-inner ring-4 ring-white">
+                <Trash2 size={40} />
+              </div>
+              
+              <h3 className="text-2xl font-black text-slate-800 mb-3 tracking-tight">تأكيد الحذف</h3>
+              <p className="text-slate-500 text-sm mb-8 leading-relaxed px-4">
+                هل أنت متأكد من حذف الحساب <br/>
+                <span className="font-bold text-red-600 text-base block mt-1 dir-ltr">({emailToDelete})</span>
+                <span className="block mt-2 text-xs opacity-70">سيتم منعه من الدخول للنظام نهائياً.</span>
+              </p>
+              
+              <div className="flex flex-col gap-3">
+                <button
+                  disabled={isDeleting}
+                  onClick={() => removeFromWhitelist(emailToDelete)}
+                  className="w-full py-4 bg-red-600 hover:bg-red-700 text-white rounded-2xl font-black text-sm shadow-xl shadow-red-200 transition-all flex items-center justify-center gap-3 active:scale-[0.98] disabled:opacity-50 disabled:pointer-events-none"
+                >
+                  {isDeleting ? (
+                    <>
+                      <RefreshCw size={18} className="animate-spin" />
+                      <span>جاري الحذف...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 size={18} />
+                      <span>نعم، أحذف</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  disabled={isDeleting}
+                  onClick={() => setEmailToDelete(null)}
+                  className="w-full py-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-2xl font-bold text-sm transition-all active:scale-[0.98] disabled:opacity-50"
+                >
+                  تراجع
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -1257,62 +1385,130 @@ export default function App() {
 
           {/* Financial Summary */}
           <section className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm overflow-hidden relative">
-            <div className="absolute top-0 left-0 w-1 h-full bg-indigo-600"></div>
-            <h2 className="text-[10px] font-bold text-slate-400 mb-6 uppercase tracking-normal flex items-center gap-2">
-              <BarChart3 size={14} className="text-indigo-600" />
-              الملخص المالي {searchQuery.trim() ? '(للنتائج الحالية)' : '(للملف كاملاً)'}
-            </h2>
-            
-            <div className="space-y-6">
-              <div className="flex flex-col">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-slate-500">إجمالي المبلغ</span>
-                  <span className="text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full font-bold">
-                    {totals.amountCol || 'لم يحدد'}
-                  </span>
-                </div>
-                <p className="text-3xl font-black text-slate-800 tracking-normal">
-                  {totals.totalAmount.toLocaleString('ar-SA')} <span className="text-xs font-normal text-slate-400">ر.س</span>
-                </p>
-              </div>
-
-              <div className="h-px bg-slate-100 w-full"></div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="flex flex-col bg-orange-50/50 p-3 rounded-2xl border border-orange-100">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-medium text-orange-700">إجمالي المتبقي</span>
-                    <span className="text-[9px] bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-bold">
-                      {totals.remainingCol || 'لم يحدد'}
-                    </span>
-                  </div>
-                  <p className="text-xl font-black text-orange-600 tracking-tight">
-                    {totals.totalRemaining.toLocaleString('ar-SA')} <span className="text-[10px] font-normal text-orange-400">ر.س</span>
-                  </p>
-                </div>
-
-                <div className="flex flex-col bg-emerald-50/50 p-3 rounded-2xl border border-emerald-100">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-medium text-emerald-700">إجمالي مبالغ التسوية</span>
-                    <span className="text-[9px] bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full font-bold">
-                      تم سدادها
-                    </span>
-                  </div>
-                  <p className="text-xl font-black text-emerald-600 tracking-tight">
-                    {totals.totalSettledGlobal.toLocaleString('ar-SA')} <span className="text-[10px] font-normal text-emerald-400">ر.س</span>
-                  </p>
-                </div>
-              </div>
-
-              <div className="bg-slate-50 p-3 rounded-xl border border-slate-100">
-                <p className="text-[10px] text-slate-500 font-bold flex items-center gap-2">
-                  <Info size={12} className="text-indigo-500" />
-                  المسدد اﻹجمالي: للفترة بالكامل | المسدد حالياً: للبحث الحالي
-                </p>
+            <div className="absolute top-0 left-0 w-1.5 h-full bg-indigo-600"></div>
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                <BarChart3 size={16} className="text-indigo-600" />
+                الملخص المالي
+              </h2>
+              <div className="flex gap-2">
+                <span className="text-[9px] font-bold bg-indigo-50 text-indigo-600 px-2 py-1 rounded-lg border border-indigo-100">
+                  {searchQuery.trim() || filterType !== 'all' ? 'فلترة نشطة' : 'البيانات كاملة'}
+                </span>
               </div>
             </div>
+            
+            <div className="space-y-4">
+              {/* Total Amount Card */}
+              <div className="bg-slate-50 rounded-2xl p-5 border border-slate-200/50 relative overflow-hidden group">
+                <div className="absolute -right-4 -top-4 text-slate-200/40 group-hover:scale-110 transition-transform">
+                  <Wallet size={96} strokeWidth={1} />
+                </div>
+                <div className="relative z-10 text-right">
+                  <div className="flex items-center justify-end gap-2 mb-2">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">إجمالي المبلغ في الملف</span>
+                    <div className="p-1.5 bg-white rounded-lg text-indigo-600 shadow-sm border border-slate-100">
+                      <Wallet size={16} />
+                    </div>
+                  </div>
+                  <div className="flex items-baseline justify-end gap-2">
+                    <p className="text-3xl font-black text-slate-800 leading-none tracking-tight">
+                      {totals.totalAmount.toLocaleString('ar-SA')}
+                    </p>
+                    <span className="text-xs font-bold text-slate-400">ر.س</span>
+                  </div>
+                  <div className="flex items-center justify-end gap-2 mt-3">
+                    <span className="text-[9px] bg-slate-200/50 text-slate-500 px-2 py-0.5 rounded-full font-bold">
+                      العمود: {totals.amountCol || 'غير محدد'}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
-            {!totals.amountCol && !totals.remainingCol && fileName && (
+              <div className="grid grid-cols-2 gap-4">
+                {/* Remaining Card */}
+                <div className="bg-orange-50/50 rounded-2xl p-4 border border-orange-100/50 relative overflow-hidden group">
+                  <div className="absolute -right-2 -top-2 text-orange-200/30 group-hover:scale-110 transition-transform">
+                    <History size={64} strokeWidth={1} />
+                  </div>
+                  <div className="relative z-10">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 bg-orange-100 rounded-lg text-orange-600">
+                        <History size={16} />
+                      </div>
+                      <span className="text-[10px] font-bold text-orange-700">إجمالي المتبقي</span>
+                    </div>
+                    <div className="flex items-baseline gap-1">
+                      <p className="text-xl font-black text-orange-900 tracking-tight">
+                        {totals.totalRemaining.toLocaleString('ar-SA')}
+                      </p>
+                      <span className="text-[10px] font-bold text-orange-400 leading-none">ر.س</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Settled Card */}
+                <div className="bg-emerald-50/50 rounded-2xl p-4 border border-emerald-100/50 relative overflow-hidden group">
+                  <div className="absolute -right-2 -top-2 text-emerald-200/30 group-hover:scale-110 transition-transform">
+                    <CheckCircle size={64} strokeWidth={1} />
+                  </div>
+                  <div className="relative z-10">
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="p-1.5 bg-emerald-100 rounded-lg text-emerald-600">
+                        <CheckCircle size={16} />
+                      </div>
+                      <span className="text-[10px] font-bold text-emerald-700">المسدد حالياً</span>
+                    </div>
+                    <div className="flex items-baseline gap-1">
+                      <p className="text-xl font-black text-emerald-900 tracking-tight">
+                        {totals.totalSettledFiltered.toLocaleString('ar-SA')}
+                      </p>
+                      <span className="text-[10px] font-bold text-emerald-400 leading-none">ر.س</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Liquidation Card (Restored and Integrated) */}
+                {totals.totalLiquidation > 0 && (
+                  <div className="bg-red-50/50 rounded-2xl p-4 border border-red-100/50 relative overflow-hidden group">
+                    <div className="absolute -right-2 -top-2 text-red-200/30 group-hover:scale-110 transition-transform">
+                      <TrendingDown size={64} strokeWidth={1} />
+                    </div>
+                    <div className="relative z-10">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="p-1.5 bg-red-100 rounded-lg text-red-600">
+                          <TrendingDown size={16} />
+                        </div>
+                        <span className="text-[10px] font-bold text-red-700">إجمالي التصفية</span>
+                      </div>
+                      <div className="flex items-baseline gap-1">
+                        <p className="text-xl font-black text-red-900 tracking-tight">
+                          {totals.totalLiquidation.toLocaleString('ar-SA')}
+                        </p>
+                        <span className="text-[10px] font-bold text-red-400 leading-none">ر.س</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <div className="flex items-start gap-3">
+                  <div className="p-1.5 bg-indigo-100 rounded-lg text-indigo-600 shrink-0">
+                    <Info size={14} />
+                  </div>
+                  <div>
+                    <h4 className="text-[10px] font-black text-slate-800 uppercase mb-1">دليل الملخص</h4>
+                    <p className="text-[10px] text-slate-400 leading-relaxed font-medium">
+                      المسدد حالياً يمثل إجمالي مبالغ الصفوف المختارة في البحث المتاح حالياً، بينما المتبقي يمثل مجموع المبالغ غير المسددة.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {!totals.amountCol && !totals.remainingCol && fileName && (
               <p className="mt-6 text-[10px] text-slate-400 italic text-center leading-relaxed">
                 * لم يتم العثور على أعمدة مخصصة للمبالغ تلقائياً. تأكد من تسمية الأعمدة بكلمات مثل (المبلغ) أو (المتبقي).
               </p>
@@ -1341,8 +1537,7 @@ export default function App() {
                 </motion.div>
               )}
             </AnimatePresence>
-          </section>
-        </aside>
+          </aside>
 
         {/* Main Search Area */}
         <div className="col-span-12 lg:col-span-8 flex flex-col gap-6">
@@ -1506,9 +1701,7 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {filteredData.map((row, idx) => {
-                          // Find original index in 'data' to maintain status correctly
-                          const originalIdx = data.findIndex(r => r === row);
+                        {filteredItems.map(({ row, index: originalIdx }, idx) => {
                           const isPaid = paidRows.has(originalIdx);
                           const isModifiedRow = modifiedRows.has(originalIdx);
                           
@@ -1537,7 +1730,7 @@ export default function App() {
                           
                           return (
                             <motion.tr
-                              key={idx}
+                              key={originalIdx}
                               initial={{ opacity: 0 }}
                               animate={{ opacity: 1 }}
                               transition={{ delay: Math.min(idx * 0.01, 0.2) }}
@@ -1584,6 +1777,7 @@ export default function App() {
                                       if (isNoteColumn) {
                                         if (isAuthorized) {
                                           setEditingCell({ row: originalIdx, col: header });
+                                          setEditingValue(String(row[header] || ''));
                                         } else {
                                           alert('ليس لديك صلاحية التعديل');
                                         }
@@ -1598,14 +1792,55 @@ export default function App() {
                                     }`}
                                   >
                                     {isEditing ? (
-                                      <input 
-                                        autoFocus
-                                        className="w-full bg-white border border-indigo-300 rounded px-2 py-1 outline-none ring-2 ring-indigo-100"
-                                        value={String(row[header] || '')}
-                                        onChange={(e) => updateNote(originalIdx, header, e.target.value)}
-                                        onBlur={() => setEditingCell(null)}
-                                        onKeyDown={(e) => e.key === 'Enter' && setEditingCell(null)}
-                                      />
+                                      <div className="flex items-center gap-2 w-full bg-white border-2 border-indigo-500 rounded-xl p-1 shadow-lg shadow-indigo-100 z-10 animate-in zoom-in-95 duration-200">
+                                        <input 
+                                          autoFocus
+                                          className="flex-1 bg-transparent px-2 py-1 outline-none text-sm font-medium text-slate-700 min-w-0"
+                                          value={editingValue}
+                                          onChange={(e) => setEditingValue(e.target.value)}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              updateNote(originalIdx, header, editingValue);
+                                              setEditingCell(null);
+                                            }
+                                            if (e.key === 'Escape') {
+                                              setEditingCell(null);
+                                            }
+                                          }}
+                                          onBlur={() => {
+                                            // Delay closing to allow button clicks to register
+                                            setTimeout(() => {
+                                              setEditingCell(prev => {
+                                                if (prev?.row === originalIdx && prev?.col === header) {
+                                                  return null;
+                                                }
+                                                return prev;
+                                              });
+                                            }, 250);
+                                          }}
+                                        />
+                                        <div className="flex items-center gap-1 border-r border-slate-100 pr-1">
+                                          <button 
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            onClick={() => {
+                                              updateNote(originalIdx, header, editingValue);
+                                              setEditingCell(null);
+                                            }}
+                                            className="p-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-all"
+                                            title="حفظ (Enter)"
+                                          >
+                                            <Check size={14} strokeWidth={3} />
+                                          </button>
+                                          <button 
+                                            onMouseDown={(e) => e.preventDefault()}
+                                            onClick={() => setEditingCell(null)}
+                                            className="p-1.5 bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-all"
+                                            title="إلغاء (Esc)"
+                                          >
+                                            <X size={14} strokeWidth={3} />
+                                          </button>
+                                        </div>
+                                      </div>
                                     ) : (
                                       <div className="flex items-start justify-between gap-2">
                                         <span>{highlightText(String(row[header] || '-'), searchQuery)}</span>
@@ -1648,6 +1883,12 @@ export default function App() {
                                       <span className="text-[10px] opacity-70">المسدد حالياً:</span>
                                       <span className="font-bold">{totals.totalSettledFiltered.toLocaleString('ar-SA')} ر.س</span>
                                     </div>
+                                    {totals.totalLiquidation > 0 && (
+                                      <div className="flex items-center gap-2 bg-red-50 text-red-600 px-2 py-0.5 rounded-lg border border-red-100">
+                                        <span className="text-[10px] opacity-70">إجمالي التصفية:</span>
+                                        <span className="font-bold">{totals.totalLiquidation.toLocaleString('ar-SA')} ر.س</span>
+                                      </div>
+                                    )}
                                   </div>
                                 ) : header === headers[0] ? (
                                   <div className="flex items-center gap-2 text-indigo-600">
