@@ -13,6 +13,7 @@ import {
   X, 
   User, 
   Phone, 
+  MessageCircle,
   MapPin, 
   SearchSlash, 
   Clock, 
@@ -395,7 +396,7 @@ export default function App() {
       }
 
       // 1. Owner Hardcoded Check (Admin privileges ONLY for owner)
-      if (email === 'langmix2@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+      if (email === 'langmix2@gmail.com' || email === 'lnagmix2@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
         console.log("Owner admin detected");
         setIsAdmin(true);
         setIsAuthorized(true);
