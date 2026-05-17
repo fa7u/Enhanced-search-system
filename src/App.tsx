@@ -129,6 +129,14 @@ interface DataRow {
 
 type FilterType = 'all' | 'paid' | 'modified' | 'normal';
 
+const normalizeArabic = (str: string) => {
+  return str
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .toLowerCase();
+};
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
@@ -166,10 +174,10 @@ export default function App() {
     let results = data.map((row, index) => ({ row, index }));
     
     if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
+      const query = normalizeArabic(searchQuery.trim());
       results = results.filter(({ row }) => {
         return Object.values(row).some(value => 
-          String(value || '').toLowerCase().includes(query)
+          normalizeArabic(String(value || '')).includes(query)
         );
       });
     }
@@ -193,8 +201,14 @@ export default function App() {
 
   const filteredData = useMemo(() => filteredItems.map(item => item.row), [filteredItems]);
 
-  // Financial Summary Calculation
+    // Financial Summary Calculation
   const totals = useMemo(() => {
+    // Helper to check for liquidation keyword (normalized)
+    const checkLiquidation = (val: any) => {
+      const s = normalizeArabic(String(val || ''));
+      return s.includes('تصفيه'); // After normalization 'تصفية' becomes 'تصفيه'
+    };
+
     const isSearching = searchQuery.trim() !== '' || filterType !== 'all';
     // Use indexed items to avoid repeated findIndex calls
     const currentItems = isSearching ? filteredItems : data.map((row, index) => ({ row, index }));
@@ -215,10 +229,8 @@ export default function App() {
     currentItems.forEach(({ row, index }) => {
       const isPaid = paidRows.has(index);
       
-      // Check for liquidation keyword "تصفية" in all columns of this row
-      const isLiquidation = Object.values(row).some(val => 
-        String(val).toLowerCase().includes('تصفية')
-      );
+      // Check for liquidation keyword "تصفية" or "تصفيه" in all columns of this row
+      const isLiquidation = Object.values(row).some(val => checkLiquidation(val));
 
       if (amountCol) {
         const val = parseFloat(String(row[amountCol]).replace(/[^0-9.-]+/g, ''));
@@ -787,35 +799,36 @@ export default function App() {
   const updateNote = (originalIdx: number, header: string, newValue: string) => {
     if (!isAuthorized) return;
     
-    // Use functional updates to ensure we have the latest state
-    setData(prevData => {
-      const nextData = [...prevData];
-      nextData[originalIdx] = { ...nextData[originalIdx], [header]: newValue };
-      
-      // Track modification
-      setModifiedRows(prevModified => {
-        const nextModified = new Set(prevModified);
-        nextModified.add(originalIdx);
-        
-        // Persist to DB after both states are updated
-        // Note: we use values derived from the closure of the functional update to be safe
-        saveToDB(
-          nextData, 
-          headers, 
-          fileName || '', 
-          Array.from(paidRows) as number[], 
-          Array.from(nextModified) as number[], 
-          true, 
-          originalData
-        );
-        
-        return nextModified;
-      });
-      
-      return nextData;
-    });
+    // 1. Check if value is empty - ignore update if it is
+    if (!newValue.trim()) {
+      setEditingCell(null);
+      return;
+    }
+
+    // 2. Update data immediately
+    const nextData = [...data];
+    nextData[originalIdx] = { ...nextData[originalIdx], [header]: newValue };
+    setData(nextData);
     
+    // 2. Clear editing cell immediately to avoid stale state
+    setEditingCell(null);
+    
+    // 3. Mark as modified and save
+    const nextModified = new Set(modifiedRows);
+    nextModified.add(originalIdx);
+    setModifiedRows(nextModified);
     setIsModified(true);
+    
+    // 4. Save to DB
+    saveToDB(
+      nextData, 
+      headers, 
+      fileName || '', 
+      Array.from(paidRows) as number[], 
+      Array.from(nextModified) as number[], 
+      true, 
+      originalData
+    );
   };
 
   const undoRowChanges = (originalIdx: number) => {
@@ -932,7 +945,8 @@ export default function App() {
 
     itemsToExport.forEach(({ row, index }) => {
       const isPaid = paidRows.has(index);
-      const isLiquidation = Object.values(row).some(v => String(v).includes('تصفية'));
+      const rowStr = normalizeArabic(Object.values(row).join(' '));
+      const isLiquidation = rowStr.includes('تصفيه');
 
       if (totals.amountCol) {
         const val = parseFloat(String(row[totals.amountCol]).replace(/[^0-9.-]+/g, ''));
@@ -1011,9 +1025,9 @@ export default function App() {
       if (isPaid) {
         rowBgColor = "D1FAE5"; // Emerald 100
       } else if (isModifiedRow) {
-        // Check if notes column contains "تصفية"
-        const rowString = JSON.stringify(rowData);
-        if (rowString.includes('تصفية')) {
+        // Check if notes column contains "تصفية" or "تصفيه"
+        const rowString = normalizeArabic(JSON.stringify(rowData));
+        if (rowString.includes('تصفيه')) {
           rowBgColor = "FECACA"; // Red 200 for Tasfya
         } else {
           rowBgColor = "DBEAFE"; // Blue 100 for general edit
@@ -2035,9 +2049,9 @@ export default function App() {
                             textClass = "text-emerald-700 font-bold";
                             numBgClass = "text-emerald-500 bg-emerald-50/50";
                           } else if (isModifiedRow) {
-                            // Find any note-like field and check for "تصفية"
-                            const rowString = JSON.stringify(row);
-                            if (rowString.includes('تصفية')) {
+                            // Find any note-like field and check for "تصفية" or "تصفيه"
+                            const rowString = normalizeArabic(JSON.stringify(row));
+                            if (rowString.includes('تصفيه')) {
                               rowBgClass = "bg-red-50/70 hover:bg-red-100/70 border-r-4 border-r-red-400";
                               textClass = "text-red-700 font-bold";
                               numBgClass = "text-red-500 bg-red-100/50";
@@ -2121,45 +2135,19 @@ export default function App() {
                                           onKeyDown={(e) => {
                                             if (e.key === 'Enter') {
                                               updateNote(originalIdx, header, editingValue);
-                                              setEditingCell(null);
                                             }
                                             if (e.key === 'Escape') {
                                               setEditingCell(null);
                                             }
                                           }}
                                           onBlur={() => {
-                                            // Delay closing to allow button clicks to register
-                                            setTimeout(() => {
-                                              setEditingCell(prev => {
-                                                if (prev?.row === originalIdx && prev?.col === header) {
-                                                  return null;
-                                                }
-                                                return prev;
-                                              });
-                                            }, 250);
+                                            if (editingValue !== String(row[header] || '')) {
+                                              updateNote(originalIdx, header, editingValue);
+                                            } else {
+                                              setEditingCell(null);
+                                            }
                                           }}
                                         />
-                                        <div className="flex items-center gap-1 border-r border-slate-100 pr-1">
-                                          <button 
-                                            onMouseDown={(e) => e.preventDefault()}
-                                            onClick={() => {
-                                              updateNote(originalIdx, header, editingValue);
-                                              setEditingCell(null);
-                                            }}
-                                            className="p-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 rounded-lg transition-all"
-                                            title="حفظ (Enter)"
-                                          >
-                                            <Check size={14} strokeWidth={3} />
-                                          </button>
-                                          <button 
-                                            onMouseDown={(e) => e.preventDefault()}
-                                            onClick={() => setEditingCell(null)}
-                                            className="p-1.5 bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-all"
-                                            title="إلغاء (Esc)"
-                                          >
-                                            <X size={14} strokeWidth={3} />
-                                          </button>
-                                        </div>
                                       </div>
                                     ) : (
                                       <div className="flex items-start justify-between gap-2">
