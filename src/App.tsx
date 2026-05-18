@@ -2198,7 +2198,7 @@ export default function App() {
                                       </div>
                                     )}
                                   </div>
-                                ) : header === headers[0] ? (
+                                ) : hIdx === 0 ? (
                                   <div className="flex items-center gap-2 text-indigo-600">
                                     <BarChart3 size={14} />
                                     <span>ملخص مالي</span>
