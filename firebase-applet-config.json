@@ -1,10 +1,10 @@
 {
-  "projectId": "noted-yarrow-0x6pd",
-  "appId": "1:920988104854:web:c02b29069fe20821042ab7",
-  "apiKey": "AIzaSyA5rOQQ4-SzzHFggZzoBRwXR8gW8_Dwz10",
-  "authDomain": "noted-yarrow-0x6pd.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-dbaa407c-52e6-4178-b605-b566e1f9abc0",
-  "storageBucket": "noted-yarrow-0x6pd.firebasestorage.app",
-  "messagingSenderId": "920988104854",
-  "measurementId": ""
+  "projectId": "langmix",
+  "appId": "1:307689469017:web:1a1351a8241dc282406d48",
+  "apiKey": "AIzaSyCJuWLW8o6s907oMgjMe6x21Gqk3FtopYM",
+  "authDomain": "langmix.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "langmix.firebasestorage.app",
+  "messagingSenderId": "307689469017",
+  "measurementId": "G-30LXCGGSYG"
 }
