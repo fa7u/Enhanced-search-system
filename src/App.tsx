@@ -155,7 +155,6 @@ export default function App() {
   const [isAddingEmail, setIsAddingEmail] = useState(false);
   const [emailToDelete, setEmailToDelete] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [authorizedDocPath, setAuthorizedDocPath] = useState<string | null>(null);
   
   const [data, setData] = useState<DataRow[]>([]);
   const [originalData, setOriginalData] = useState<DataRow[]>([]);
@@ -413,9 +412,7 @@ export default function App() {
       return;
     }
 
-    if (!authorizedDocPath) return;
-
-    const docRef = doc(db, authorizedDocPath);
+    const docRef = doc(db, 'whitelist', email);
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -440,7 +437,7 @@ export default function App() {
     });
 
     return () => unsubscribe();
-  }, [user, authorizedDocPath]);
+  }, [user]);
 
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
@@ -475,37 +472,13 @@ export default function App() {
         return;
       }
       
-      // 2. Just Whitelist Check (Access only) - First check perfect email match, then check domain whitelist
-      let foundDoc = false;
-      let targetDocPath = `whitelist/${email}`;
-      let whitelistData: any = null;
-
+      // 2. Just Whitelist Check (Access only)
       const whitelistRef = doc(db, 'whitelist', email);
       const whitelistSnap = await getDoc(whitelistRef);
 
       if (whitelistSnap?.exists()) {
-        foundDoc = true;
-        whitelistData = whitelistSnap.data();
-        targetDocPath = `whitelist/${email}`;
-      } else {
-        // If exact email not found, check if a domain whitelist matches
-        const atIdx = email.indexOf('@');
-        if (atIdx !== -1) {
-          const domain = email.substring(atIdx); // e.g. "@company.com"
-          const domainRef = doc(db, 'whitelist', domain);
-          const domainSnap = await getDoc(domainRef);
-          if (domainSnap?.exists()) {
-            foundDoc = true;
-            whitelistData = domainSnap.data();
-            targetDocPath = `whitelist/${domain}`;
-            console.log("Access granted via domain whitelist:", domain);
-          }
-        }
-      }
-
-      if (foundDoc && whitelistData) {
-        setAuthorizedDocPath(targetDocPath);
-        console.log("Access granted: target document is", targetDocPath);
+        const whitelistData = whitelistSnap.data();
+        console.log("Access granted: Email found in whitelist");
         
         const expiry = whitelistData.subscriptionExpiry;
         const now = new Date();
@@ -524,7 +497,6 @@ export default function App() {
         setIsAuthorized(true);
       } else {
         console.warn(`Authorization Result: REJECTED (Email ${email} not found in whitelist)`);
-        setAuthorizedDocPath(null);
         setIsAuthorized(false);
       }
     } catch (globalError: any) {
@@ -1463,13 +1435,13 @@ export default function App() {
               </div>
 
               <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-                <p className="text-xs font-bold text-slate-500 mb-3">إضافة مستخدم جديد أو نطاق كامل (مثال: @company.com):</p>
+                <p className="text-xs font-bold text-slate-500 mb-3">إضافة مستخدم جديد:</p>
                 <div className="flex flex-col gap-3">
                   <div className="grid grid-cols-2 gap-2">
                     <div className="relative">
                       <input 
                         type="text" 
-                        placeholder="الاسم التعريفي أو الجهة"
+                        placeholder="اسم صاحب الحساب"
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
                         className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right"
@@ -1493,8 +1465,8 @@ export default function App() {
                   <div className="flex gap-2">
                     <div className="flex-1 relative">
                       <input 
-                        type="text" 
-                        placeholder="البريد الإلكتروني أو النطاق مثل @company.com"
+                        type="email" 
+                        placeholder="example@gmail.com"
                         value={newEmail}
                         onChange={(e) => setNewEmail(e.target.value)}
                         className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right font-mono"
