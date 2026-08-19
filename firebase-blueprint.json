@@ -1,15 +1,21 @@
 {
   "entities": {
     "WhitelistEntry": {
-      "title": "Whitelist Entry",
-      "description": "An entry in the whitelist representing an allowed user email.",
+      "title": "User Account & Whitelist Entry",
+      "description": "An entry representing a registered user, their approval status, and subscription.",
       "type": "object",
       "properties": {
         "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "uid": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "active", "rejected"] },
         "addedAt": { "type": "string", "format": "date-time" },
-        "role": { "type": "string", "enum": ["admin", "visitor"] }
+        "subscriptionExpiry": { "type": "string", "format": "date-time" },
+        "role": { "type": "string", "enum": ["admin", "visitor"] },
+        "isFrozen": { "type": "boolean" }
       },
-      "required": ["email", "addedAt", "role"]
+      "required": ["email", "status"]
     },
     "Admin": {
       "title": "Admin",
@@ -24,7 +30,7 @@
   "firestore": {
     "/whitelist/{email}": {
       "schema": "WhitelistEntry",
-      "description": "Collection of allowed user emails."
+      "description": "Collection of user accounts and approval records."
     },
     "/admins/{uid}": {
       "schema": "Admin",

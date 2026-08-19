@@ -15,24 +15,26 @@ service cloud.firestore {
        return isSignedIn() && (
          request.auth.uid == "kQhokyxqh6avfQBvtFb2NDTmx4n1" ||
          request.auth.uid == "acCG3siZciQkWN7jRj5FXwGtDCf2" ||
-         (request.auth.token != null && "email" in request.auth.token && (request.auth.token.email == "langmix2@gmail.com" || request.auth.token.email == "lnagmix2@gmail.com"))
+         (request.auth.token != null && "email" in request.auth.token && (
+           request.auth.token.email.lower() == "langmix2@gmail.com" || 
+           request.auth.token.email.lower() == "lnagmix2@gmail.com"
+         ))
        );
     }
 
-    function isValidWhitelistEntry(data) {
-      return data.email is string && data.email.lower().size() <= 256 &&
-             data.addedAt is timestamp;
-    }
-
-    // Whitelist collection
+    // Whitelist / Registered Users collection
     match /whitelist/{email} {
-      // Users can check status by email. 
-      // We allow any signed-in user to 'get' a document to avoid issues with missing email claims in token.
-      // They still can't 'list' the whole collection.
+      // Users can check their approval status
       allow get: if isSignedIn();
-      
-      // Admins can manage the list
-      allow list, create, update, delete: if isAdmin();
+
+      // New users can register for activation (status: pending)
+      allow create: if isSignedIn() && (
+        isAdmin() ||
+        (request.resource.data.status == "pending")
+      );
+
+      // Only admins can list users, update approval/subscription status, or delete
+      allow list, update, delete: if isAdmin();
     }
 
     // Admins collection

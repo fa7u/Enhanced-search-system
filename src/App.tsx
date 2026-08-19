@@ -28,6 +28,7 @@ import {
   RotateCcw,
   Check,
   CheckCircle,
+  CheckCircle2,
   FileEdit,
   LayoutGrid,
   Circle,
@@ -38,9 +39,18 @@ import {
   Lock,
   LogOut,
   ShieldAlert,
+  Shield,
   Mail,
   Trash2,
-  RefreshCw
+  RefreshCw,
+  Hourglass,
+  UserCheck,
+  UserX,
+  UserPlus,
+  Sparkles,
+  AlertCircle,
+  Eye,
+  ArrowLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { initializeApp } from 'firebase/app';
@@ -139,17 +149,39 @@ const normalizeArabic = (str: string) => {
     .toLowerCase();
 };
 
+interface WhitelistUser {
+  email: string;
+  name?: string;
+  photoURL?: string;
+  uid?: string;
+  addedAt?: any;
+  createdAt?: any;
+  approvedAt?: any;
+  subscriptionExpiry?: any;
+  role?: 'admin' | 'visitor';
+  status?: 'pending' | 'active' | 'rejected';
+  isFrozen?: boolean;
+}
+
 export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [userApprovalStatus, setUserApprovalStatus] = useState<'pending' | 'active' | 'rejected' | null>(null);
   const [isFrozen, setIsFrozen] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showAdminPanel, setShowAdminPanel] = useState(false);
+  const [isPreviewPendingScreen, setIsPreviewPendingScreen] = useState(false);
+  const [adminTab, setAdminTab] = useState<'pending' | 'active' | 'add'>('pending');
+  const [adminSearchQuery, setAdminSearchQuery] = useState('');
+  const [pendingPeriods, setPendingPeriods] = useState<Record<string, '1m' | '6m' | '1y' | 'lifetime'>>({});
+  const [isApproving, setIsApproving] = useState<string | null>(null);
+  const [isRejecting, setIsRejecting] = useState<string | null>(null);
   const [frozenReason, setFrozenReason] = useState<'manual' | 'expired' | null>(null);
-  const [whitelist, setWhitelist] = useState<{email: string, addedAt: any, subscriptionExpiry: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[]>([]);
+  const [whitelist, setWhitelist] = useState<WhitelistUser[]>([]);
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
   const [newSubscriptionPeriod, setNewSubscriptionPeriod] = useState<'1m' | '6m' | '1y' | 'lifetime'>('1m');
@@ -202,6 +234,22 @@ export default function App() {
   }, [searchResults, filterType, paidRows, modifiedRows]);
 
   const filteredData = useMemo(() => filteredItems.map(item => item.row), [filteredItems]);
+
+  const pendingUsers = useMemo(() => {
+    return whitelist.filter(u => u.status === 'pending');
+  }, [whitelist]);
+
+  const activeUsers = useMemo(() => {
+    let list = whitelist.filter(u => u.status !== 'pending' && u.status !== 'rejected');
+    if (adminSearchQuery.trim()) {
+      const q = normalizeArabic(adminSearchQuery.trim());
+      list = list.filter(u => 
+        normalizeArabic(u.name || '').includes(q) || 
+        normalizeArabic(u.email || '').includes(q)
+      );
+    }
+    return list;
+  }, [whitelist, adminSearchQuery]);
 
     // Financial Summary Calculation
   const totals = useMemo(() => {
@@ -396,6 +444,7 @@ export default function App() {
         await checkAuthorization(detectedEmail || '');
       } else {
         setIsAuthorized(null);
+        setUserApprovalStatus(null);
         setIsAdmin(false);
         setIsCheckingAuth(false);
       }
@@ -403,14 +452,19 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Add Real-time listener for current user's status
+  // Real-time listener for current user's approval and subscription status
   useEffect(() => {
     if (!user?.email) return;
     
     const email = user.email.toLowerCase();
     
-    // Skip real-time listener for owners
-    if (email === 'langmix2@gmail.com' || email === 'lnagmix2@gmail.com' || user.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+    // Skip real-time listener for owner admins
+    if (
+      email === 'langmix2@gmail.com' || 
+      email === 'lnagmix2@gmail.com' || 
+      user.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2' ||
+      user.uid === 'kQhokyxqh6avfQBvtFb2NDTmx4n1'
+    ) {
       return;
     }
 
@@ -419,27 +473,54 @@ export default function App() {
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        const expiry = data.subscriptionExpiry;
-        const now = new Date();
-        const hasExpired = expiry && expiry.toDate() < now;
+        const status = data.status || 'active'; // Existing whitelist entries default to active
+        setUserApprovalStatus(status);
 
-        if (data.isFrozen || hasExpired) {
-          setIsFrozen(true);
-          setFrozenReason(hasExpired ? 'expired' : 'manual');
-          clearLocalData();
+        if (status === 'active') {
+          const expiry = data.subscriptionExpiry;
+          const now = new Date();
+          const hasExpired = expiry && (expiry.toDate ? expiry.toDate() : new Date(expiry.seconds * 1000)) < now;
+
+          if (data.isFrozen || hasExpired) {
+            setIsFrozen(true);
+            setFrozenReason(hasExpired ? 'expired' : 'manual');
+            clearLocalData();
+          } else {
+            setIsFrozen(false);
+            setFrozenReason(null);
+          }
+          setIsAuthorized(true);
         } else {
-          setIsFrozen(false);
-          setFrozenReason(null);
+          setIsAuthorized(false);
         }
-        setIsAuthorized(true);
       } else {
-        // Doc removed
+        // Document does not exist yet (or pending registration)
+        setUserApprovalStatus('pending');
         setIsAuthorized(false);
       }
+    }, (error) => {
+      console.warn("User status listener notice:", error);
     });
 
     return () => unsubscribe();
   }, [user]);
+
+  // Real-time listener for Admin: automatic sync of pending & active users
+  useEffect(() => {
+    if (!isAdmin) return;
+    
+    const unsubscribe = onSnapshot(collection(db, 'whitelist'), (querySnapshot) => {
+      const list = querySnapshot.docs.map(docSnap => ({
+        ...docSnap.data(),
+        email: docSnap.id
+      })) as WhitelistUser[];
+      setWhitelist(list);
+    }, (err) => {
+      console.warn("Admin whitelist snapshot notice:", err);
+    });
+    
+    return () => unsubscribe();
+  }, [isAdmin]);
 
   const checkAuthorization = async (rawEmail: string) => {
     setIsCheckingAuth(true);
@@ -451,6 +532,7 @@ export default function App() {
     if (!email) {
       console.error("Auth Fail: Email is missing");
       setIsAuthorized(false);
+      setUserApprovalStatus('rejected');
       setIsCheckingAuth(false);
       return;
     }
@@ -460,59 +542,100 @@ export default function App() {
       if (!currentUser) {
         console.error("Auth Fail: No authenticated user object found");
         setIsAuthorized(false);
+        setUserApprovalStatus(null);
         setIsCheckingAuth(false);
         return;
       }
 
       // 1. Owner Hardcoded Check (Admin privileges ONLY for owner)
-      if (email === 'langmix2@gmail.com' || email === 'lnagmix2@gmail.com' || currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2') {
+      if (
+        email === 'langmix2@gmail.com' || 
+        email === 'lnagmix2@gmail.com' || 
+        currentUser.uid === 'acCG3siZciQkWN7jRj5FXwGtDCf2' ||
+        currentUser.uid === 'kQhokyxqh6avfQBvtFb2NDTmx4n1'
+      ) {
         console.log("Owner admin detected");
         setIsAdmin(true);
         setIsAuthorized(true);
+        setUserApprovalStatus('active');
         setIsFrozen(false); // Owner is never frozen
         setIsCheckingAuth(false);
         return;
       }
       
-      // 2. Just Whitelist Check (Access only)
+      // 2. Check Whitelist in Firestore
       const whitelistRef = doc(db, 'whitelist', email);
       const whitelistSnap = await getDoc(whitelistRef);
 
       if (whitelistSnap?.exists()) {
         const whitelistData = whitelistSnap.data();
-        console.log("Access granted: Email found in whitelist");
-        
-        const expiry = whitelistData.subscriptionExpiry;
-        const now = new Date();
-        const hasExpired = expiry && expiry.toDate() < now;
+        const status = whitelistData.status || 'active'; // Backward compatibility: existing users default to active!
+        setUserApprovalStatus(status);
+        console.log("User record found with status:", status);
 
-        if (whitelistData.isFrozen || hasExpired) {
-          console.log("User is frozen or expired. Clearing local data and blocking access to upload.");
-          setIsFrozen(true);
-          setFrozenReason(hasExpired ? 'expired' : 'manual');
-          clearLocalData(); 
+        if (status === 'pending') {
+          setIsAuthorized(false);
+        } else if (status === 'rejected') {
+          setIsAuthorized(false);
         } else {
-          setIsFrozen(false);
-          setFrozenReason(null);
+          // Active user
+          const expiry = whitelistData.subscriptionExpiry;
+          const now = new Date();
+          const hasExpired = expiry && (expiry.toDate ? expiry.toDate() : new Date(expiry.seconds * 1000)) < now;
+
+          if (whitelistData.isFrozen || hasExpired) {
+            console.log("User is frozen or expired. Clearing local data and blocking access to upload.");
+            setIsFrozen(true);
+            setFrozenReason(hasExpired ? 'expired' : 'manual');
+            clearLocalData(); 
+          } else {
+            setIsFrozen(false);
+            setFrozenReason(null);
+          }
+          
+          setIsAuthorized(true);
         }
-        
-        setIsAuthorized(true);
       } else {
-        console.warn(`Authorization Result: REJECTED (Email ${email} not found in whitelist)`);
+        // 3. New User Auto-Registration with status: 'pending'
+        console.log("New user detected. Creating pending registration in Firestore:", email);
+        const newRecord = {
+          email: email,
+          name: currentUser.displayName || email.split('@')[0],
+          photoURL: currentUser.photoURL || '',
+          uid: currentUser.uid,
+          status: 'pending',
+          role: 'visitor',
+          isFrozen: false,
+          createdAt: serverTimestamp(),
+          addedAt: serverTimestamp(),
+          subscriptionExpiry: null
+        };
+
+        try {
+          await setDoc(whitelistRef, newRecord);
+          console.log("Auto-registration document created in Firestore successfully.");
+        } catch (setErr) {
+          console.warn("Auto-registration setDoc note:", setErr);
+        }
+
+        setUserApprovalStatus('pending');
         setIsAuthorized(false);
       }
     } catch (globalError: any) {
       console.error('Fatal Authorization Error:', globalError);
       setIsAuthorized(false);
+      setUserApprovalStatus('pending');
     } finally {
       setIsCheckingAuth(false);
       console.log("--- AUTHORIZATION END ---");
     }
   };
 
-  const handleRefreshAuth = () => {
+  const handleRefreshAuth = async () => {
     if (user?.email) {
-      checkAuthorization(user.email);
+      setIsManualRefreshing(true);
+      await checkAuthorization(user.email);
+      setTimeout(() => setIsManualRefreshing(false), 600);
     }
   };
 
@@ -532,7 +655,6 @@ export default function App() {
         console.warn('Login flow cancelled by user');
       } else {
         console.error('Firebase Auth Error:', error);
-        // Special handling for the internal assertion error
         if (error.message?.includes('INTERNAL ASSERTION FAILED')) {
           console.error("Detected Firebase Internal state corruption. Advising refresh.");
         }
@@ -563,20 +685,61 @@ export default function App() {
     removeFromDB();
   };
 
-  // Whitelist Management Functions
+  // User Approval & Whitelist Management Functions
   const fetchWhitelist = async () => {
     if (!isAdmin) return;
     const path = 'whitelist';
     try {
       const querySnapshot = await getDocs(collection(db, path));
-      const list = querySnapshot.docs.map(doc => ({
-        ...doc.data(),
-        email: doc.id
-      })) as {email: string, addedAt: any, subscriptionExpiry: any, role: 'admin' | 'visitor', isFrozen?: boolean, name?: string}[];
+      const list = querySnapshot.docs.map(docSnap => ({
+        ...docSnap.data(),
+        email: docSnap.id
+      })) as WhitelistUser[];
       setWhitelist(list);
     } catch (error) {
       console.error('Fetch Whitelist Error:', error);
       handleFirestoreError(error, OperationType.LIST, path);
+    }
+  };
+
+  const approveUser = async (targetEmail: string, period?: '1m' | '6m' | '1y' | 'lifetime') => {
+    if (!isAdmin) return;
+    const email = targetEmail.trim().toLowerCase();
+    const selectedPeriod = period || pendingPeriods[email] || '1m';
+    setIsApproving(email);
+    const path = `whitelist/${email}`;
+    try {
+      let expiryDate: Date | null = new Date();
+      if (selectedPeriod === '1m') expiryDate.setDate(expiryDate.getDate() + 30);
+      else if (selectedPeriod === '6m') expiryDate.setDate(expiryDate.getDate() + 180);
+      else if (selectedPeriod === '1y') expiryDate.setDate(expiryDate.getDate() + 365);
+      else if (selectedPeriod === 'lifetime') expiryDate = null;
+
+      const docRef = doc(db, 'whitelist', email);
+      await updateDoc(docRef, {
+        status: 'active',
+        subscriptionExpiry: expiryDate,
+        isFrozen: false,
+        approvedAt: serverTimestamp()
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, path);
+    } finally {
+      setIsApproving(null);
+    }
+  };
+
+  const rejectUser = async (targetEmail: string) => {
+    if (!isAdmin) return;
+    const email = targetEmail.trim().toLowerCase();
+    setIsRejecting(email);
+    const path = `whitelist/${email}`;
+    try {
+      await deleteDoc(doc(db, 'whitelist', email));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    } finally {
+      setIsRejecting(null);
     }
   };
 
@@ -587,7 +750,6 @@ export default function App() {
       await updateDoc(doc(db, 'whitelist', targetEmail.toLowerCase()), {
         isFrozen: !currentStatus
       });
-      await fetchWhitelist();
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -599,7 +761,6 @@ export default function App() {
     const email = newEmail.trim().toLowerCase();
     const path = `whitelist/${email}`;
     try {
-      // Calculate expiry date
       let expiryDate: Date | null = new Date();
       if (newSubscriptionPeriod === '1m') expiryDate.setDate(expiryDate.getDate() + 30);
       else if (newSubscriptionPeriod === '6m') expiryDate.setDate(expiryDate.getDate() + 180);
@@ -611,16 +772,16 @@ export default function App() {
         email,
         name: newName.trim(),
         addedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
         subscriptionExpiry: expiryDate,
         role: 'visitor',
+        status: 'active',
         isFrozen: false
       });
-      console.log("Successfully added to whitelist in Firestore:", email);
       setNewEmail('');
       setNewName('');
       setNewSubscriptionPeriod('1m');
-      await fetchWhitelist();
-      alert(`تمت إضافة ${email} بنجاح إلى قاعدة البيانات`);
+      setAdminTab('active');
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, path);
     } finally {
@@ -640,7 +801,6 @@ export default function App() {
       const currentData = docSnap.data();
       let currentExpiry = currentData.subscriptionExpiry?.toDate() || new Date();
       
-      // If subscription already expired, start from today
       if (currentExpiry < new Date()) {
         currentExpiry = new Date();
       }
@@ -659,11 +819,9 @@ export default function App() {
 
       await updateDoc(docRef, {
         subscriptionExpiry: newExpiry,
+        status: 'active',
         isFrozen: false 
       });
-      
-      await fetchWhitelist();
-      alert('تم تحديث مدة الاشتراك بنجاح');
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, path);
     }
@@ -681,13 +839,7 @@ export default function App() {
     setIsDeleting(true);
     try {
       await deleteDoc(doc(db, 'whitelist', lowerEmail));
-      
-      // Update local state immediately
-      setWhitelist(prev => prev.filter(item => item.email.toLowerCase() !== lowerEmail));
       setEmailToDelete(null);
-      
-      // Sync from server
-      await fetchWhitelist();
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, path);
     } finally {
@@ -1159,58 +1311,225 @@ export default function App() {
     );
   }
 
-  if (!user) {
+  if (!user && !isPreviewPendingScreen) {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center font-sans p-6" dir="rtl">
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-slate-100 to-indigo-50/30 flex flex-col items-center justify-center font-sans p-6" dir="rtl">
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-white p-10 rounded-[2.5rem] shadow-2xl border border-slate-200 max-w-md w-full text-center"
+          className="bg-white p-8 md:p-10 rounded-[2.5rem] shadow-2xl shadow-slate-200/60 border border-slate-200/80 max-w-md w-full text-center relative overflow-hidden"
         >
-          <div className="w-20 h-20 bg-indigo-600 rounded-3xl flex items-center justify-center text-white mx-auto mb-8 shadow-xl shadow-indigo-100">
-            <Lock size={40} />
+          {/* Top highlight glow */}
+          <div className="absolute -top-10 left-1/2 -translate-x-1/2 w-48 h-48 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          <div className="w-20 h-20 bg-indigo-600 rounded-3xl flex items-center justify-center text-white mx-auto mb-6 shadow-xl shadow-indigo-200 ring-8 ring-indigo-50">
+            <Lock size={38} />
           </div>
-          <h1 className="text-3xl font-black text-slate-800 mb-4">نظام البحث الخاص</h1>
-          <p className="text-slate-500 mb-8 leading-relaxed">
-            هذا النظام مخصص للأشخاص المصرح لهم فقط. يرجى تسجيل الدخول للوصول إلى بياناتك.
+
+          <span className="inline-block bg-indigo-50 text-indigo-700 text-xs font-black px-3 py-1 rounded-full mb-3 border border-indigo-100">
+            نظام إدارة وبحث السجلات
+          </span>
+
+          <h1 className="text-2xl md:text-3xl font-black text-slate-800 mb-3">تسجيل الدخول وطلب الانضمام</h1>
+          
+          <p className="text-slate-500 text-xs md:text-sm mb-6 leading-relaxed">
+            سجّل دخولك بحساب Google ليتم إرسال طلبك تلقائياً إلى المشرف للموافقة والتفعيل الفوري.
           </p>
 
-          <div className="bg-slate-50 rounded-2xl p-6 mb-8 border border-slate-100/80 group transition-all hover:bg-slate-100/50 duration-500 text-center">
-            <p className="text-[10px] text-slate-400 mb-4 font-bold uppercase tracking-widest">للتواصل مع المالك للتفعيل</p>
-            <div className="flex flex-col gap-3">
-              <a 
-                href="mailto:fahussein79@gmail.com" 
-                className="flex items-center justify-center gap-3 text-indigo-600 font-bold hover:underline break-all bg-white p-3 rounded-xl shadow-sm border border-slate-50 text-sm"
-              >
-                <Mail size={16} />
-                <span className="font-mono">fahussein79@gmail.com</span>
-              </a>
-              <a 
-                href="https://wa.me/966550665495"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center justify-center gap-3 text-emerald-600 font-bold hover:underline bg-white p-3 rounded-xl shadow-sm border border-slate-50 text-sm"
-              >
-                <MessageCircle size={16} />
-                <span className="font-mono">0550665495</span>
-              </a>
+          {/* Quick Notice */}
+          <div className="bg-slate-50 rounded-2xl p-4 mb-6 border border-slate-100 text-right space-y-2 text-xs">
+            <div className="flex items-center gap-2 text-slate-700 font-bold">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+              <span>المشتركون المفعلون: دخول مباشر لملفاتك</span>
+            </div>
+            <div className="flex items-center gap-2 text-slate-700 font-bold">
+              <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+              <span>المستخدمون الجدد: مراجعة وتفعيل سريع من الإدارة</span>
             </div>
           </div>
 
           <button 
             onClick={login}
             disabled={isLoadingAuth}
-            className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed"
+            className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-bold flex items-center justify-center gap-3 hover:bg-indigo-700 transition-all shadow-xl shadow-indigo-200 active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed mb-6"
           >
             {isLoadingAuth ? (
               <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
             ) : (
               <>
-                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-6 h-6 bg-white rounded-full p-1" />
-                تسجيل الدخول باستخدام جوجل
+                <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google" className="w-6 h-6 bg-white rounded-full p-1 shadow-sm" />
+                <span>متابعة باستخدام حساب Google</span>
               </>
             )}
           </button>
+
+          {/* Contact Owner */}
+          <div className="pt-4 border-t border-slate-100 text-center">
+            <p className="text-[10px] text-slate-400 mb-3 font-bold uppercase tracking-widest">للتواصل المباشر مع المشرف</p>
+            <div className="grid grid-cols-2 gap-2">
+              <a 
+                href="https://wa.me/966550665495" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="flex items-center justify-center gap-2 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 p-2.5 rounded-xl border border-emerald-100 text-xs font-black transition-all"
+              >
+                <MessageCircle size={14} />
+                <span>واتساب</span>
+              </a>
+              <a 
+                href="mailto:fahussein79@gmail.com" 
+                className="flex items-center justify-center gap-2 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 p-2.5 rounded-xl border border-indigo-100 text-xs font-black transition-all"
+              >
+                <Mail size={14} />
+                <span>البريد الإلكتروني</span>
+              </a>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    );
+  }
+
+  // Pending Screen (also shown if isPreviewPendingScreen is active for admin)
+  if (isPreviewPendingScreen || (user && (userApprovalStatus === 'pending' || (!isAuthorized && userApprovalStatus !== 'rejected')))) {
+    const displayUser = user || {
+      displayName: 'مستخدم تجريبي (معاينة)',
+      email: 'user@example.com',
+      photoURL: ''
+    };
+
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 flex flex-col items-center justify-center p-6" dir="rtl">
+        {/* Admin Preview Header Indicator */}
+        {isPreviewPendingScreen && (
+          <div className="fixed top-0 left-0 right-0 bg-amber-500 text-slate-900 px-4 py-2.5 font-black text-xs flex items-center justify-between z-[100] shadow-md">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-slate-900 animate-ping" />
+              <span>وضع المعاينة: هذه هي الشاشة التي يراها أي شخص يسجل في تطبيقك قبل تفعيلك له.</span>
+            </div>
+            <button 
+              onClick={() => setIsPreviewPendingScreen(false)}
+              className="bg-slate-900 text-white px-3 py-1 rounded-lg text-xs font-bold hover:bg-slate-800 transition-all shadow-sm"
+            >
+              إغلاق المعاينة والعودة للوحة الإدارة
+            </button>
+          </div>
+        )}
+
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.95, y: 15 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          className="max-w-md w-full bg-white rounded-[2.5rem] shadow-2xl shadow-slate-300/40 p-8 md:p-10 text-center border border-slate-100 relative overflow-hidden"
+        >
+          {/* Top Decorative Amber Glow */}
+          <div className="absolute -top-12 left-1/2 -translate-x-1/2 w-40 h-40 bg-amber-400/20 rounded-full blur-3xl pointer-events-none" />
+
+          {/* Animated Status Icon */}
+          <div className="relative w-20 h-20 bg-amber-50 text-amber-600 rounded-3xl flex items-center justify-center mx-auto mb-6 ring-8 ring-amber-50/50 shadow-inner">
+            <Hourglass size={38} className="animate-spin text-amber-500" style={{ animationDuration: '6s' }} />
+            <span className="absolute -top-1 -right-1 flex h-4 w-4">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-4 w-4 bg-amber-500 border-2 border-white"></span>
+            </span>
+          </div>
+          
+          <h1 className="text-2xl font-black text-slate-800 mb-2 font-sans tracking-tight">حسابك قيد التفعيل والمراجعة</h1>
+          
+          <p className="text-slate-500 text-xs md:text-sm mb-6 leading-relaxed">
+            تم استلام طلب تسجيلك بنجاح. حسابك الآن بانتظار موافقة مسؤول النظام لتفعيله ومنحك الصلاحيات.
+          </p>
+
+          {/* User Profile Card */}
+          <div className="bg-slate-50/80 rounded-2xl p-4 mb-5 border border-slate-100 text-right flex items-center gap-3.5">
+            {displayUser.photoURL ? (
+              <img src={displayUser.photoURL} alt={displayUser.displayName || ''} className="w-12 h-12 rounded-xl object-cover ring-2 ring-indigo-100" />
+            ) : (
+              <div className="w-12 h-12 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center text-lg shadow-sm">
+                {(displayUser.displayName || displayUser.email || 'U')[0].toUpperCase()}
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-bold text-slate-800 truncate">{displayUser.displayName || 'مستخدم مسجل'}</p>
+                <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded-full border border-amber-200 shrink-0">
+                  <Clock size={10} />
+                  قيد الانتظار
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 font-mono truncate">{displayUser.email}</p>
+            </div>
+          </div>
+
+          {/* Real-time Notice */}
+          <div className="bg-indigo-50/60 border border-indigo-100 rounded-2xl p-3.5 mb-6 text-right flex items-start gap-2.5">
+            <Sparkles size={18} className="text-indigo-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-indigo-900 leading-relaxed font-medium">
+              <span className="font-bold text-indigo-700">تحديث فوري تلقائي:</span> سيتم فتح النظام لك مباشرة فور قيام المسؤول بقبول الطلب بدون الحاجة لإعادة تحميل الصفحة.
+            </p>
+          </div>
+
+          {/* Contact Owner */}
+          <div className="bg-slate-50 rounded-2xl p-5 mb-6 border border-slate-100 text-center">
+            <p className="text-[10px] text-slate-400 mb-3 font-bold uppercase tracking-widest">لطلب التفعيل الفوري تواصل مع المشرف</p>
+            <div className="grid grid-cols-2 gap-2">
+              <a 
+                href="https://wa.me/966550665495" 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                className="flex items-center justify-center gap-2 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 p-2.5 rounded-xl border border-emerald-100 text-xs font-black transition-all shadow-sm active:scale-95"
+              >
+                <MessageCircle size={14} />
+                <span>واتساب</span>
+              </a>
+              <a 
+                href="mailto:fahussein79@gmail.com" 
+                className="flex items-center justify-center gap-2 text-indigo-700 bg-indigo-50 hover:bg-indigo-100 p-2.5 rounded-xl border border-indigo-100 text-xs font-black transition-all shadow-sm active:scale-95"
+              >
+                <Mail size={14} />
+                <span>بريد إلكتروني</span>
+              </a>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex flex-col gap-2.5">
+            <button 
+              onClick={handleRefreshAuth}
+              disabled={isManualRefreshing}
+              className="w-full h-12 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-all flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 active:scale-[0.98] text-xs md:text-sm disabled:opacity-70"
+            >
+              <RefreshCw size={16} className={isManualRefreshing ? "animate-spin" : ""} />
+              <span>{isManualRefreshing ? "جاري التحقق من التفعيل..." : "تحقق من حالة التفعيل الآن"}</span>
+            </button>
+
+            {isPreviewPendingScreen ? (
+              <button 
+                onClick={() => setIsPreviewPendingScreen(false)}
+                className="h-11 bg-slate-800 text-white rounded-xl font-bold hover:bg-slate-900 transition-all flex items-center justify-center gap-2 text-xs shadow-md mt-1"
+              >
+                <X size={14} />
+                <span>الخروج من المعاينة والعودة للنظام</span>
+              </button>
+            ) : (
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                <button 
+                  onClick={login}
+                  className="h-11 bg-slate-100 text-slate-700 rounded-xl font-bold hover:bg-slate-200 transition-all flex items-center justify-center gap-2 text-xs"
+                >
+                  <User size={14} />
+                  <span>تبديل الحساب</span>
+                </button>
+
+                <button 
+                  onClick={() => auth.signOut()}
+                  className="h-11 bg-white text-red-500 border border-red-100 rounded-xl font-bold hover:bg-red-50 transition-all flex items-center justify-center gap-2 text-xs"
+                >
+                  <LogOut size={14} />
+                  <span>تسجيل الخروج</span>
+                </button>
+              </div>
+            )}
+          </div>
         </motion.div>
       </div>
     );
@@ -1222,16 +1541,16 @@ export default function App() {
         <motion.div 
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
-          className="max-w-md w-full bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-10 text-center"
+          className="max-w-md w-full bg-white rounded-3xl shadow-xl shadow-slate-200/50 p-10 text-center border border-slate-100"
         >
-          <div className="w-20 h-20 bg-indigo-50 text-indigo-600 rounded-3xl flex items-center justify-center mx-auto mb-8 ring-8 ring-indigo-50/50">
-            <Lock size={40} />
+          <div className="w-20 h-20 bg-red-50 text-red-600 rounded-3xl flex items-center justify-center mx-auto mb-8 ring-8 ring-red-50/50">
+            <ShieldAlert size={40} />
           </div>
           
           <h1 className="text-2xl font-bold text-slate-800 mb-4 font-sans tracking-tight">الدخول غير مصرح به</h1>
           
           <p className="text-slate-500 text-sm mb-8 leading-relaxed px-4">
-            عذراً، هذا البريد الإلكتروني غير مضاف في قائمة المصرح لهم بالدخول.
+            عذراً، هذا البريد الإلكتروني غير مضاف في قائمة المصرح لهم بالدخول أو تم رفض الطلب.
             يرجى التواصل مع مسؤول النظام لطلب صلاحية الوصول.
           </p>
 
@@ -1246,9 +1565,9 @@ export default function App() {
                 <span className="text-base font-mono">fahussein79@gmail.com</span>
               </a>
               <a 
-                href="https://wa.me/966550665495"
-                target="_blank"
-                rel="noopener noreferrer"
+                href="https://wa.me/966550665495" 
+                target="_blank" 
+                rel="noopener noreferrer" 
                 className="flex items-center justify-center gap-3 text-emerald-600 font-bold hover:underline bg-white p-3 rounded-xl shadow-sm border border-slate-50"
               >
                 <MessageCircle size={18} />
@@ -1273,12 +1592,6 @@ export default function App() {
               <LogOut size={20} />
               تسجيل الخروج
             </button>
-          </div>
-          
-          <div className="mt-8 pt-8 border-t border-slate-50">
-            <p className="text-[10px] text-slate-300 font-mono uppercase tracking-tighter uppercase">
-              Current ID: {user?.uid?.slice(0, 8)}...
-            </p>
           </div>
         </motion.div>
       </div>
@@ -1313,6 +1626,26 @@ export default function App() {
         </div>
       )}
 
+      {/* Admin Notification Banner for Pending Approvals */}
+      {isAdmin && pendingUsers.length > 0 && (
+        <div className="bg-amber-500 text-slate-900 px-4 py-2.5 flex items-center justify-between shadow-sm z-40 text-xs font-bold sticky top-0">
+          <div className="flex items-center gap-2">
+            <Hourglass size={16} className="animate-spin text-slate-900" style={{ animationDuration: '4s' }} />
+            <span>يوجد <strong className="underline underline-offset-2">{pendingUsers.length}</strong> طلب انضمام وتفعيل جديد بانتظار موافقتك</span>
+          </div>
+          <button
+            onClick={() => {
+              setShowAdminPanel(true);
+              setAdminTab('pending');
+            }}
+            className="bg-slate-900 text-white px-3 py-1.5 rounded-lg font-black hover:bg-slate-800 transition-all text-xs flex items-center gap-1.5 shadow-sm active:scale-95"
+          >
+            <span>مراجعة وتفعيل الآن</span>
+            <ArrowLeft size={13} />
+          </button>
+        </div>
+      )}
+
       {/* Top Navigation Bar */}
       <nav className="h-16 bg-white border-b border-slate-200 px-6 md:px-8 flex items-center justify-between shadow-sm shrink-0 sticky top-0 z-50">
         <div className="flex items-center gap-3">
@@ -1342,12 +1675,22 @@ export default function App() {
           
           {isAdmin && (
             <button 
-              onClick={() => setShowAdminPanel(true)}
-              className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 relative group"
+              onClick={() => {
+                setShowAdminPanel(true);
+                if (pendingUsers.length > 0) {
+                  setAdminTab('pending');
+                }
+              }}
+              className="h-10 px-3.5 rounded-xl bg-indigo-600 text-white flex items-center gap-2 hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 relative group"
               title="إدارة المستخدمين"
             >
-              <Lock size={18} />
-              <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 border-2 border-white rounded-full"></div>
+              <Lock size={16} />
+              <span className="text-xs font-bold hidden md:inline">لوحة الإدارة</span>
+              {pendingUsers.length > 0 && (
+                <span className="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full animate-pulse border-2 border-white shadow-sm">
+                  {pendingUsers.length}
+                </span>
+              )}
             </button>
           )}
 
@@ -1402,7 +1745,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Admin Whitelist Panel Modal */}
+      {/* Admin Whitelist & User Approval Panel Modal */}
       <AnimatePresence>
         {showAdminPanel && isAdmin && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
@@ -1417,91 +1760,236 @@ export default function App() {
               initial={{ opacity: 0, x: 100 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: 100 }}
-              className="relative bg-white h-full max-w-md w-full ml-auto shadow-2xl flex flex-col"
+              className="relative bg-white h-full max-w-lg w-full ml-auto shadow-2xl flex flex-col rounded-l-3xl overflow-hidden"
             >
-              <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+              {/* Header */}
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-white shrink-0">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white">
-                    <User size={20} />
+                  <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-100">
+                    <ShieldCheck size={20} />
                   </div>
                   <div>
-                    <h3 className="font-bold text-slate-800">إدارة المصرح لهم</h3>
+                    <h3 className="font-black text-slate-800 text-base">إدارة المستخدمين والصلاحيات</h3>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">لوحة التحكم الإدارية</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setShowAdminPanel(false)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400">
-                    <X size={20} />
-                  </button>
-                </div>
+                <button 
+                  onClick={() => setShowAdminPanel(false)} 
+                  className="p-2 hover:bg-slate-100 rounded-xl text-slate-400 transition-colors"
+                >
+                  <X size={20} />
+                </button>
               </div>
 
-              <div className="p-6 border-b border-slate-100 bg-slate-50/50">
-                <p className="text-xs font-bold text-slate-500 mb-3">إضافة مستخدم جديد:</p>
-                <div className="flex flex-col gap-3">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="relative">
-                      <input 
-                        type="text" 
-                        placeholder="اسم صاحب الحساب"
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right"
-                      />
-                      <User size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                    </div>
-                    <div className="relative">
-                      <select
-                        value={newSubscriptionPeriod}
-                        onChange={(e) => setNewSubscriptionPeriod(e.target.value as any)}
-                        className="w-full h-11 px-4 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none appearance-none text-right"
-                      >
-                        <option value="1m">شهر واحد</option>
-                        <option value="6m">6 أشهر</option>
-                        <option value="1y">سنة كاملة</option>
-                        <option value="lifetime">مدى الحياة</option>
-                      </select>
-                      <Calendar size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <div className="flex-1 relative">
-                      <input 
-                        type="email" 
-                        placeholder="example@gmail.com"
-                        value={newEmail}
-                        onChange={(e) => setNewEmail(e.target.value)}
-                        className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right font-mono"
-                      />
-                      <Mail size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400" />
-                    </div>
+              {/* Navigation Tabs */}
+              <div className="flex border-b border-slate-100 bg-slate-50/70 p-1.5 gap-1 shrink-0">
+                <button
+                  onClick={() => setAdminTab('pending')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                    adminTab === 'pending'
+                      ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/60'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-white/50'
+                  }`}
+                >
+                  <Hourglass size={14} />
+                  <span>طلبات التفعيل</span>
+                  {pendingUsers.length > 0 && (
+                    <span className="bg-red-500 text-white text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                      {pendingUsers.length}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setAdminTab('active')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                    adminTab === 'active'
+                      ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/60'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-white/50'
+                  }`}
+                >
+                  <UserCheck size={14} />
+                  <span>المفعلين</span>
+                  <span className="bg-slate-100 text-slate-600 text-[10px] font-black px-1.5 py-0.2 rounded-full">
+                    {activeUsers.length}
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setAdminTab('add')}
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                    adminTab === 'add'
+                      ? 'bg-white text-indigo-600 shadow-sm border border-slate-200/60'
+                      : 'text-slate-500 hover:text-slate-800 hover:bg-white/50'
+                  }`}
+                >
+                  <UserPlus size={14} />
+                  <span>إضافة يدوية</span>
+                </button>
+              </div>
+
+              {/* Tab 1: Pending Users */}
+              {adminTab === 'pending' && (
+                <div className="flex-1 overflow-auto p-5 space-y-4 custom-scrollbar">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-black text-slate-700">الطلبات الجديدة بانتظار التفعيل ({pendingUsers.length}):</p>
                     <button 
-                      onClick={addToWhitelist}
-                      disabled={isAddingEmail || !newEmail.trim() || !newName.trim()}
-                      className="px-6 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center min-w-[80px]"
+                      onClick={fetchWhitelist}
+                      className="p-1 text-slate-400 hover:text-indigo-600 transition-colors" 
+                      title="تحديث"
                     >
-                      {isAddingEmail ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : 'إضافة'}
+                      <RefreshCw size={14} />
                     </button>
                   </div>
-                </div>
-              </div>
 
-              <div className="flex-1 overflow-auto p-6 space-y-4 custom-scrollbar">
-                <p className="text-xs font-bold text-slate-500 mb-2">القائمة الحالية ({whitelist.length}):</p>
-                {whitelist.length === 0 ? (
-                  <div key="no-whitelist" className="text-center py-10 opacity-40">
-                    <Mail size={40} className="mx-auto mb-2" />
-                    <p className="text-xs font-bold">لا يوجد مستخدمين مضافين حالياً</p>
-                  </div>
-                ) : (
-                  whitelist.map((item) => (
-                    <div key={item.email} className="p-4 bg-white border border-slate-100 rounded-[2rem] group hover:border-indigo-100 transition-all shadow-sm">
-                      <div className="flex flex-col gap-4">
-                        {/* Top: User Info */}
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-inner">
-                            <Mail size={18} />
+                  {pendingUsers.length === 0 ? (
+                    <div className="text-center py-16 px-4">
+                      <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-4 border border-emerald-100">
+                        <CheckCircle2 size={32} />
+                      </div>
+                      <h4 className="font-bold text-slate-800 text-sm mb-1">لا توجد طلبات معلقة حالياً</h4>
+                      <p className="text-xs text-slate-400 max-w-[220px] mx-auto">
+                        عندما يسجل أي مستخدم جديد بجوجل ستظهر بياناته هنا لتفعيلها مباشرة.
+                      </p>
+                    </div>
+                  ) : (
+                    pendingUsers.map((item) => {
+                      const selectedPeriod = pendingPeriods[item.email] || '1m';
+                      return (
+                        <motion.div 
+                          key={item.email}
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="p-4 bg-amber-50/40 border border-amber-200/70 rounded-2xl shadow-sm space-y-3.5"
+                        >
+                          {/* User Header */}
+                          <div className="flex items-start gap-3">
+                            {item.photoURL ? (
+                              <img src={item.photoURL} alt="" className="w-10 h-10 rounded-xl object-cover ring-1 ring-amber-200 shrink-0" />
+                            ) : (
+                              <div className="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center font-bold text-sm shrink-0">
+                                {(item.name || item.email)[0].toUpperCase()}
+                              </div>
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-black text-slate-800 truncate">{item.name || 'مستخدم جديد'}</p>
+                                <span className="bg-amber-100 text-amber-800 text-[9px] font-black px-2 py-0.5 rounded-full border border-amber-200">
+                                  جديد
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600 font-mono truncate">{item.email}</p>
+                              <p className="text-[10px] text-slate-400 mt-0.5">
+                                وقت الطلب: {item.createdAt?.seconds ? new Date(item.createdAt.seconds * 1000).toLocaleString('ar-EG') : 'الآن'}
+                              </p>
+                            </div>
                           </div>
+
+                          {/* Duration selector & Action Buttons */}
+                          <div className="bg-white p-3 rounded-xl border border-amber-100 space-y-2.5">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-slate-600">مدة الاشتراك:</span>
+                              <select
+                                value={selectedPeriod}
+                                onChange={(e) => {
+                                  setPendingPeriods(prev => ({
+                                    ...prev,
+                                    [item.email]: e.target.value as any
+                                  }));
+                                }}
+                                className="h-8 px-2.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 bg-slate-50 focus:ring-2 focus:ring-indigo-500 outline-none"
+                              >
+                                <option value="1m">شهر واحد (30 يوم)</option>
+                                <option value="6m">6 أشهر (180 يوم)</option>
+                                <option value="1y">سنة كاملة (365 يوم)</option>
+                                <option value="lifetime">مدى الحياة (مفتوح)</option>
+                              </select>
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-1">
+                              <button
+                                onClick={() => approveUser(item.email, selectedPeriod)}
+                                disabled={isApproving === item.email}
+                                className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all shadow-sm disabled:opacity-50"
+                              >
+                                {isApproving === item.email ? (
+                                  <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <>
+                                    <Check size={14} />
+                                    <span>قبول وتفعيل</span>
+                                  </>
+                                )}
+                              </button>
+
+                              <button
+                                onClick={() => rejectUser(item.email)}
+                                disabled={isRejecting === item.email}
+                                className="h-9 px-3.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-100 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-all disabled:opacity-50"
+                                title="رفض وحذف الطلب"
+                              >
+                                {isRejecting === item.email ? (
+                                  <div className="w-3.5 h-3.5 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                ) : (
+                                  <>
+                                    <X size={14} />
+                                    <span>رفض</span>
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
+
+              {/* Tab 2: Active Users */}
+              {adminTab === 'active' && (
+                <div className="flex-1 overflow-auto p-5 space-y-4 custom-scrollbar">
+                  {/* Search Bar */}
+                  <div className="relative">
+                    <input 
+                      type="text" 
+                      placeholder="بحث بالاسم أو البريد..."
+                      value={adminSearchQuery}
+                      onChange={(e) => setAdminSearchQuery(e.target.value)}
+                      className="w-full h-10 pl-4 pr-9 rounded-xl border border-slate-200 bg-slate-50 text-xs focus:bg-white focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                    <Search size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    {adminSearchQuery && (
+                      <button 
+                        onClick={() => setAdminSearchQuery('')}
+                        className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs font-black text-slate-700">
+                    <span>المستخدمين المفعلين ({activeUsers.length}):</span>
+                  </div>
+
+                  {activeUsers.length === 0 ? (
+                    <div className="text-center py-12 opacity-50">
+                      <User size={36} className="mx-auto mb-2 text-slate-400" />
+                      <p className="text-xs font-bold text-slate-500">لا يوجد مستخدمين مطابقين للبحث</p>
+                    </div>
+                  ) : (
+                    activeUsers.map((item) => (
+                      <div key={item.email} className="p-4 bg-white border border-slate-100 rounded-2xl group hover:border-indigo-100 transition-all shadow-sm space-y-3">
+                        {/* User Info */}
+                        <div className="flex items-start gap-3">
+                          {item.photoURL ? (
+                            <img src={item.photoURL} alt="" className="w-10 h-10 rounded-xl object-cover ring-1 ring-slate-200 shrink-0" />
+                          ) : (
+                            <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center font-bold text-sm shrink-0">
+                              {(item.name || item.email)[0].toUpperCase()}
+                            </div>
+                          )}
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center flex-wrap gap-2">
                               <p className="text-sm font-black text-slate-800 truncate">{item.name || 'مستخدم بدون اسم'}</p>
@@ -1509,7 +1997,7 @@ export default function App() {
                                 <span className="bg-red-50 text-red-600 text-[9px] px-2 py-0.5 rounded-full font-black border border-red-100">مجمد</span>
                               )}
                             </div>
-                            <p className="text-[10px] text-slate-500 font-bold truncate break-all">{item.email}</p>
+                            <p className="text-[10px] text-slate-500 font-mono truncate">{item.email}</p>
                             <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
                               <p className="text-[10px] text-slate-400 font-bold">
                                 مضاف: {item.addedAt?.seconds ? new Date(item.addedAt.seconds * 1000).toLocaleDateString('ar-EG') : 'غير معروف'}
@@ -1528,26 +2016,27 @@ export default function App() {
                           </div>
                         </div>
 
-                        {/* Bottom: Actions */}
-                        <div className="space-y-2 pt-3 border-t border-slate-50">
-                          <div className="flex items-center gap-1">
+                        {/* Actions */}
+                        <div className="space-y-2 pt-2 border-t border-slate-50">
+                          <div className="flex items-center gap-1 flex-wrap">
                             <span className="text-[9px] font-bold text-slate-400 ml-1">تجديد:</span>
                             <button onClick={() => updateSubscription(item.email, '1m')} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-black hover:bg-indigo-100 transition-all border border-indigo-100">شهر</button>
                             <button onClick={() => updateSubscription(item.email, '6m')} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-black hover:bg-indigo-100 transition-all border border-indigo-100">6 أشهر</button>
                             <button onClick={() => updateSubscription(item.email, '1y')} className="px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg text-[9px] font-black hover:bg-indigo-100 transition-all border border-indigo-100">سنة</button>
                             <button onClick={() => updateSubscription(item.email, 'lifetime')} className="px-2 py-1 bg-slate-100 text-slate-600 rounded-lg text-[9px] font-black hover:bg-slate-200 transition-all border border-slate-200">دائم</button>
                           </div>
+                          
                           <div className="flex items-center gap-2">
                             <button 
                               onClick={() => toggleFreezeStatus(item.email, !!item.isFrozen)}
-                              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl transition-all font-black text-[10px] border shadow-sm active:scale-95 ${
+                              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl transition-all font-black text-[10px] border shadow-sm active:scale-95 ${
                                 item.isFrozen 
                                   ? 'text-emerald-700 bg-emerald-50 border-emerald-100 hover:bg-emerald-100' 
                                   : 'text-orange-700 bg-orange-50 border-orange-100 hover:bg-orange-100'
                               }`}
                             >
                               {item.isFrozen ? <CheckCircle size={12} /> : <ShieldAlert size={12} />}
-                              <span>{item.isFrozen ? 'تفعيل يدوي' : 'تجميد يدوي'}</span>
+                              <span>{item.isFrozen ? 'إلغاء التجميد' : 'تجميد الحساب'}</span>
                             </button>
                             
                             <button 
@@ -1557,20 +2046,109 @@ export default function App() {
                                 e.stopPropagation();
                                 setEmailToDelete(item.email);
                               }}
-                              className="px-3 flex items-center justify-center gap-2 py-2 rounded-xl text-red-700 bg-red-50 border border-red-100 hover:bg-red-100 active:scale-95 transition-all font-black text-[10px] shadow-sm"
+                              className="px-3 flex items-center justify-center py-1.5 rounded-xl text-red-700 bg-red-50 border border-red-100 hover:bg-red-100 active:scale-95 transition-all font-black text-[10px] shadow-sm"
+                              title="حذف الحساب"
                             >
                               <Trash2 size={12} />
                             </button>
                           </div>
                         </div>
                       </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* Tab 3: Add User Manually */}
+              {adminTab === 'add' && (
+                <div className="flex-1 overflow-auto p-6 space-y-4 custom-scrollbar">
+                  <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100/60 mb-2">
+                    <h4 className="text-xs font-black text-indigo-900 mb-1">إضافة وتفعيل فوري</h4>
+                    <p className="text-[11px] text-indigo-700 leading-relaxed">
+                      عند إضافة المستخدم من هنا سيتم تفعيله ومنحه الصلاحيات فوراً دون الحاجة لموافقة إضافية.
+                    </p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">اسم صاحب الحساب:</label>
+                      <div className="relative">
+                        <input 
+                          type="text" 
+                          placeholder="مثال: أحمد محمد"
+                          value={newName}
+                          onChange={(e) => setNewName(e.target.value)}
+                          className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right"
+                        />
+                        <User size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      </div>
                     </div>
-                  ))
-                )}
-              </div>
-              
-              <div className="p-6 bg-slate-50 text-[10px] text-slate-400 font-bold text-center border-t border-slate-100">
-                ملاحظة: الصلاحيات تمنح فور الإضافة.
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">البريد الإلكتروني (جوجل):</label>
+                      <div className="relative">
+                        <input 
+                          type="email" 
+                          placeholder="example@gmail.com"
+                          value={newEmail}
+                          onChange={(e) => setNewEmail(e.target.value)}
+                          className="w-full h-11 pl-4 pr-10 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none text-right font-mono"
+                        />
+                        <Mail size={16} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-600 mb-1">مدة الاشتراك:</label>
+                      <div className="relative">
+                        <select
+                          value={newSubscriptionPeriod}
+                          onChange={(e) => setNewSubscriptionPeriod(e.target.value as any)}
+                          className="w-full h-11 px-4 rounded-xl border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none appearance-none text-right"
+                        >
+                          <option value="1m">شهر واحد (30 يوم)</option>
+                          <option value="6m">6 أشهر (180 يوم)</option>
+                          <option value="1y">سنة كاملة (365 يوم)</option>
+                          <option value="lifetime">مدى الحياة (مفتوح)</option>
+                        </select>
+                        <Calendar size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                      </div>
+                    </div>
+
+                    <button 
+                      onClick={addToWhitelist}
+                      disabled={isAddingEmail || !newEmail.trim() || !newName.trim()}
+                      className="w-full h-12 mt-4 bg-indigo-600 text-white rounded-xl font-bold text-sm hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-indigo-100"
+                    >
+                      {isAddingEmail ? (
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <Check size={16} />
+                          <span>إضافة وتفعيل الحساب مباشرة</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Modal Footer */}
+              <div className="p-4 bg-slate-50 border-t border-slate-100 shrink-0 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAdminPanel(false);
+                    setIsPreviewPendingScreen(true);
+                  }}
+                  className="w-full py-2.5 px-3 bg-white text-slate-700 hover:text-indigo-600 border border-slate-200 rounded-xl text-xs font-bold hover:bg-slate-100 flex items-center justify-center gap-2 transition-all shadow-sm active:scale-95"
+                >
+                  <Eye size={15} className="text-indigo-600" />
+                  <span>معاينة واجهة قيد التفعيل (كما يراها المشترك الجديد)</span>
+                </button>
+                <p className="text-[10px] text-slate-400 font-bold text-center">
+                  لوحة الإدارة - جميع التغييرات تتزامن فورياً مع السيرفر
+                </p>
               </div>
             </motion.div>
           </div>
